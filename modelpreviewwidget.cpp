@@ -9,6 +9,12 @@ ModelPreviewWidget::ModelPreviewWidget(QWidget *parent)
     , m_yRot(-45.0f)
     , m_zoom(-300.0f)
 {
+    // Explicitly request Compatibility Profile for this widget
+    QSurfaceFormat format;
+    format.setVersion(2, 1);
+    format.setProfile(QSurfaceFormat::CompatibilityProfile);
+    format.setDepthBufferSize(24);
+    setFormat(format);
 }
 
 ModelPreviewWidget::~ModelPreviewWidget()
@@ -48,7 +54,7 @@ void ModelPreviewWidget::setTexture(const QString &path)
     if (!path.isEmpty() && QFile::exists(path)) {
         QImage img(path);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-        m_texture = new QOpenGLTexture(img.flipped(Qt::Vertical));
+        m_texture = new QOpenGLTexture(img.mirrored(false, true));
 #else
         m_texture = new QOpenGLTexture(img.mirrored());
 #endif

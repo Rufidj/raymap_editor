@@ -80,7 +80,7 @@ void ModelPreviewWidget::paintGL()
     glMatrixMode(GL_MODELVIEW);
     glLoadMatrixf(m_view.constData());
     
-    // Draw Axis
+    // Draw Axis (still using immediate mode for simplicity, or could convert too)
     glDisable(GL_TEXTURE_2D);
     glBegin(GL_LINES);
     glColor3f(1, 0, 0); glVertex3f(0, 0, 0); glVertex3f(50, 0, 0);
@@ -88,9 +88,28 @@ void ModelPreviewWidget::paintGL()
     glColor3f(0, 0, 1); glVertex3f(0, 0, 0); glVertex3f(0, 0, 50);
     glEnd();
     
-    // Draw Mesh
+    // Draw Mesh using Vertex Arrays (better compatibility with some drivers/backends)
     if (m_mesh.vertices.isEmpty()) return;
     
+    // Flatten data for glDrawArrays (simple approach)
+    QVector<GLfloat> vertData;
+    QVector<GLfloat> uvData;
+    vertData.reserve(m_mesh.indices.size() * 3);
+    if (m_texture) uvData.reserve(m_mesh.indices.size() * 2);
+
+    for (int idx : m_mesh.indices) {
+        if (idx < 0 || idx >= m_mesh.vertices.size()) continue;
+        const auto &v = m_mesh.vertices[idx];
+        vertData.append(v.pos.x());
+        vertData.append(v.pos.y());
+        vertData.append(v.pos.z());
+        
+        if (m_texture) {
+            uvData.append(v.uv.x());
+            uvData.append(v.uv.y());
+        }
+    }
+
     if (m_texture) {
         glEnable(GL_TEXTURE_2D);
         m_texture->bind();
@@ -99,17 +118,23 @@ void ModelPreviewWidget::paintGL()
     } else {
         glDisable(GL_TEXTURE_2D);
         glColor3f(0.8f, 0.8f, 0.8f);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); // Wireframe if no texture
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     }
     
-    glBegin(GL_TRIANGLES);
-    for (int idx : m_mesh.indices) {
-        if (idx < 0 || idx >= m_mesh.vertices.size()) continue;
-        const auto &v = m_mesh.vertices[idx];
-        if (m_texture) glTexCoord2f(v.uv.x(), v.uv.y()); // Add UVs
-        glVertex3f(v.pos.x(), v.pos.y(), v.pos.z());
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(3, GL_FLOAT, 0, vertData.constData());
+    
+    if (m_texture && !uvData.isEmpty()) {
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glTexCoordPointer(2, GL_FLOAT, 0, uvData.constData());
     }
-    glEnd();
+    
+    glDrawArrays(GL_TRIANGLES, 0, vertData.size() / 3);
+    
+    glDisableClientState(GL_VERTEX_ARRAY);
+    if (m_texture) {
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    }
     
     if (m_texture) {
         m_texture->release();

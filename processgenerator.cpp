@@ -7,7 +7,9 @@
 
 QString ProcessGenerator::generateProcessCode(const QString &processName, 
                                               const QString &assetPath,
-                                              const QString &type)
+                                              const QString &type,
+                                              const QString &wrapperOpen,
+                                              const QString &wrapperClose)
 {
     QString code;
     QTextStream out(&code);
@@ -55,8 +57,8 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
     
         out << "    // Load Model and Texture (Cached)\n";
         out << "    if (g_" << processName << "_model == 0)\n";
-        out << "        g_" << processName << "_model = RAY_LOAD_MD3(\"" << cleanPath << "\");\n";
-        out << "        g_" << processName << "_texture = map_load(\"" << texturePath << "\");\n";
+        out << "        g_" << processName << "_model = RAY_LOAD_MD3(" << wrapperOpen << "\"" << cleanPath << "\"" << wrapperClose << ");\n";
+        out << "        g_" << processName << "_texture = map_load(" << wrapperOpen << "\"" << texturePath << "\"" << wrapperClose << ");\n";
         out << "        \n";
         out << "        if (g_" << processName << "_texture == 0)\n";
         out << "            say(\"[" << processName << "] WARNING: Failed to load texture: \" + \"" << texturePath << "\");\n";

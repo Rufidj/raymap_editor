@@ -34,6 +34,23 @@ void ProjectSettingsDialog::setupUi()
     generalLayout->addRow(tr("Versión:"), m_versionEdit);
     
     mainLayout->addWidget(generalGroup);
+
+    // --- Android Settings ---
+    QGroupBox *androidGroup = new QGroupBox(tr("Configuración Android"), this);
+    QFormLayout *androidLayout = new QFormLayout(androidGroup);
+
+    m_packageEdit = new QLineEdit(m_data.packageName);
+    if (m_packageEdit->text().isEmpty()) m_packageEdit->setText("com.example.game");
+    m_packageEdit->setPlaceholderText("com.company.game");
+
+    m_androidSupportCheck = new QCheckBox(tr("Habilitar código compatible"));
+    m_androidSupportCheck->setToolTip(tr("Genera lógica para detectar Android y usar rutas absolutas"));
+    m_androidSupportCheck->setChecked(m_data.androidSupport);
+
+    androidLayout->addRow(tr("Nombre de Paquete:"), m_packageEdit);
+    androidLayout->addRow(tr(""), m_androidSupportCheck);
+
+    mainLayout->addWidget(androidGroup);
     
     // --- Files ---
     QGroupBox *filesGroup = new QGroupBox(tr("Archivos Principales"), this);
@@ -201,6 +218,10 @@ void ProjectSettingsDialog::onAccept()
     m_data.raycastQuality = m_qualitySpin->value();
     m_data.fullscreen = m_fullscreenCheck->isChecked();
     
+    // Android
+    m_data.packageName = m_packageEdit->text();
+    m_data.androidSupport = m_androidSupportCheck->isChecked();
+    
     m_data.cameraX = m_camX->value();
     m_data.cameraY = m_camY->value();
     m_data.cameraZ = m_camZ->value();
@@ -221,6 +242,8 @@ void ProjectSettingsDialog::onAccept()
     config["fov"] = m_data.fov;
     config["raycastQuality"] = m_data.raycastQuality;
     config["fullscreen"] = m_data.fullscreen;
+    config["packageName"] = m_data.packageName;
+    config["androidSupport"] = m_data.androidSupport;
     config["cameraX"] = m_data.cameraX;
     config["cameraY"] = m_data.cameraY;
     config["cameraZ"] = m_data.cameraZ;

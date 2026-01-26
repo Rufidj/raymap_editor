@@ -7,6 +7,8 @@
 #include <QProcess>
 #include <QFileInfo>
 #include <QStandardPaths>
+#include <QDesktopServices>
+#include <QUrl>
 #include <QRegularExpression>
 #include <QDirIterator>
 #include <QImage>
@@ -38,6 +40,12 @@ bool Publisher::publish(const ProjectData &project, const PublishConfig &config)
         break;
     case Windows:
         success = publishWindows(project, config);
+        break;
+    case Switch:
+        success = publishSwitch(project, config);
+        break;
+    case Web:
+        success = publishWeb(project, config);
         break;
     default:
         emit finished(false, "Plataforma no soportada aún.");
@@ -75,18 +83,33 @@ bool Publisher::publishLinux(const ProjectData &project, const PublishConfig &co
     
     // Find runtime directory (for bgdi and libs)
     QString appDir = QCoreApplication::applicationDirPath();
-    QDir searchDir(appDir);
     QString runtimeDir;
     
-    for (int i = 0; i < 4; i++) {
-        QString candidate = searchDir.absoluteFilePath("runtime/linux-gnu");
-        if (QDir(candidate).exists()) {
-            runtimeDir = candidate;
-            qDebug() << "Found runtime dir:" << runtimeDir;
-            break;
+    // Priority: User Home (Downloaded via Installer)
+    // Priority: User Home (Downloaded via Installer)
+    QString homeRuntime = QDir::homePath() + "/.bennugd2/runtimes/linux-gnu";
+    if (QDir(homeRuntime).exists()) {
+        runtimeDir = homeRuntime;
+    } else {
+        // Fallback: Bundled
+        QDir searchDir(appDir);
+        for (int i = 0; i < 4; i++) {
+            QString candidate = searchDir.absoluteFilePath("runtime/linux-gnu");
+             if (QDir(candidate).exists()) {
+                runtimeDir = candidate;
+                break;
+            }
+            // Also check for new structure bundle
+            candidate = searchDir.absoluteFilePath("runtimes/linux-gnu");
+            if (QDir(candidate).exists()) {
+                runtimeDir = candidate;
+                break;
+            }
+            searchDir.cdUp();
         }
-        searchDir.cdUp();
     }
+    
+    qDebug() << "Using runtime dir:" << runtimeDir;
     
     // 1. Copy Compiled Game (.dcb)
     emit progress(20, "Buscando binario compilado...");
@@ -119,11 +142,18 @@ bool Publisher::publishLinux(const ProjectData &project, const PublishConfig &co
     QString bgdiPath;
     
     if (!runtimeDir.isEmpty()) {
-        QString candidate = runtimeDir + "/bgdi";
+        // Check bin/bgdi (Standard structure)
+        QString candidate = runtimeDir + "/bin/bgdi";
         if (QFile::exists(candidate)) {
             bgdiPath = candidate;
-            qDebug() << "Using bundled bgdi from runtime:" << bgdiPath;
+        } else {
+             // Check root (Flat structure)
+             candidate = runtimeDir + "/bgdi";
+             if (QFile::exists(candidate)) {
+                 bgdiPath = candidate;
+             }
         }
+        if (!bgdiPath.isEmpty()) qDebug() << "Using bundled bgdi from runtime:" << bgdiPath;
     }
     
     if (bgdiPath.isEmpty()) {
@@ -139,13 +169,20 @@ bool Publisher::publishLinux(const ProjectData &project, const PublishConfig &co
         }
     }
     
-    QFile::copy(bgdiPath, distDir + "/" + baseName); // Rename executable
-    QFile(distDir + "/" + baseName).setPermissions(QFile::ExeUser | QFile::ExeGroup | QFile::ExeOther | QFile::ReadOwner | QFile::ReadGroup | QFile::ReadOther);
+    QFile::copy(bgdiPath, distDir + "/bgdi");
+    QFile(distDir + "/bgdi").setPermissions(QFile::ExeUser | QFile::ExeGroup | QFile::ExeOther | QFile::ReadOwner | QFile::ReadGroup | QFile::ReadOther);
     
     // Copy runtime libs (.so) from runtime directory or system
     if (!runtimeDir.isEmpty() && QDir(runtimeDir).exists()) {
-        QDir runtimeLibDir(runtimeDir);
-        qDebug() << "Copying libraries from runtime directory:" << runtimeDir;
+        // Check lib/ first
+        QDir runtimeLibDir;
+        if (QDir(runtimeDir + "/lib").exists()) {
+            runtimeLibDir = QDir(runtimeDir + "/lib");
+        } else {
+            runtimeLibDir = QDir(runtimeDir);
+        }
+
+        qDebug() << "Copying libraries from:" << runtimeLibDir.absolutePath();
         QStringList filters;
         filters << "*.so*";
         QFileInfoList runtimeLibs = runtimeLibDir.entryInfoList(filters, QDir::Files);
@@ -175,22 +212,181 @@ bool Publisher::publishLinux(const ProjectData &project, const PublishConfig &co
     copyDir(project.path + "/assets", assetsDir.absolutePath());
     
     // 4. Create Launcher Script
+    // 4. Create Launcher (Wrapper ELF)
     emit progress(80, "Creando lanzador...");
-    QString scriptPath = distDir + "/run.sh";
-    QFile script(scriptPath);
-    if (script.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&script);
-        out << "#!/bin/sh\n";
-        out << "APPDIR=$(dirname \"$(readlink -f \"$0\")\")\n";
-        out << "export LD_LIBRARY_PATH=\"$APPDIR/libs:$LD_LIBRARY_PATH\"\n";
-        out << "export BENNU_LIB_PATH=\"$APPDIR/libs\"\n"; // Just in case
-        out << "cd \"$APPDIR\"\n";
-        out << "./" << baseName << " " << baseName << ".dcb\n"; // Run bgdi dcb
-        script.close();
-        script.setPermissions(QFile::ExeUser | QFile::ExeGroup | QFile::ExeOther | QFile::ReadOwner | QFile::ReadGroup | QFile::ReadOther);
+    
+    QString wrapperName = "launcher_wrapper_linux";
+    QString wrapperSrc = QCoreApplication::applicationDirPath() + "/" + wrapperName;
+    if (!QFile::exists(wrapperSrc)) wrapperSrc = QDir::currentPath() + "/" + wrapperName;
+    
+    if (QFile::exists(wrapperSrc)) {
+        QString destWrapper = distDir + "/" + baseName;
+        QFile::remove(destWrapper); // Ensure clean state
+        QFile::copy(wrapperSrc, destWrapper);
+        QFile(destWrapper).setPermissions(QFile::ExeUser | QFile::ExeGroup | QFile::ExeOther | QFile::ReadOwner | QFile::ReadGroup | QFile::ReadOther | QFile::WriteUser);
+        qDebug() << "Launcher wrapper copied to" << destWrapper;
+    } else {
+        // Fallback to script
+        qWarning() << "Launcher wrapper not found, falling back to script.";
+        QString scriptPath = distDir + "/run.sh";
+        QFile script(scriptPath);
+        if (script.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&script);
+            out << "#!/bin/sh\n";
+            out << "APPDIR=$(dirname \"$(readlink -f \"$0\")\")\n";
+            out << "export LD_LIBRARY_PATH=\"$APPDIR/libs:$LD_LIBRARY_PATH\"\n";
+            out << "export BENNU_LIB_PATH=\"$APPDIR/libs\"\n"; // Just in case
+            out << "cd \"$APPDIR\"\n";
+            out << "./bgdi " << baseName << ".dcb\n"; 
+            script.close();
+            script.setPermissions(QFile::ExeUser | QFile::ExeGroup | QFile::ExeOther | QFile::ReadOwner | QFile::ReadGroup | QFile::ReadOther);
+        }
     }
     
-    // 5. Compress / AppImage
+    // 5. Standalone Executable (Linux ELF)
+    if (config.generateLinuxStandalone) {
+        emit progress(90, "Creando ejecutable autónomo (Linux)...");
+        
+        QString stubName = "loader_stub_linux";
+        // Search for stub in app dir or current dir
+        QString stubPath = QCoreApplication::applicationDirPath() + "/" + stubName;
+        if (!QFile::exists(stubPath)) {
+            stubPath = QDir::currentPath() + "/" + stubName;
+        }
+
+        if (QFile::exists(stubPath)) {
+            QString standalonePath = config.outputPath + "/" + baseName + ".AppImage"; // Using .AppImage extension often implies single-file to users, or just .bin
+            standalonePath = config.outputPath + "/" + baseName + "_linux.bin"; // Better name
+            
+            struct FileToEmbed {
+                QString sourcePath;
+                QString relativePath;
+                QByteArray data;
+            };
+            QVector<FileToEmbed> filesToEmbed;
+
+            // 1. Add BGDI (From distDir where we already copied and renamed it)
+            // Or from runtimeDir to be safe. Let's use runtimeDir/bgdi 
+            QString bgdiSrc = bgdiPath; // Found earlier
+            QFile f(bgdiSrc);
+            if (f.open(QIODevice::ReadOnly)) {
+                filesToEmbed.append({bgdiSrc, "bgdi", f.readAll()});
+                f.close();
+            }
+
+            // 2. Add DCB
+            QFile fDcb(destDcbPath);
+            if (fDcb.open(QIODevice::ReadOnly)) {
+                filesToEmbed.append({destDcbPath, baseName + ".dcb", fDcb.readAll()});
+                fDcb.close();
+            }
+
+            // 3. Add Libraries (.so)
+            QDir libDirObj(libDir); // "distDir/libs"
+            QFileInfoList libFiles = libDirObj.entryInfoList(QDir::Files);
+            for(const auto& info : libFiles) {
+                 QFile fLib(info.absoluteFilePath());
+                 if (fLib.open(QIODevice::ReadOnly)) {
+                     // We put libs in root or lib/ subfolder. Stub sets LD_LIBRARY_PATH to . and ./lib
+                     // Let's keep them in root for simplicity or lib/
+                     filesToEmbed.append({info.absoluteFilePath(), "lib/" + info.fileName(), fLib.readAll()});
+                     fLib.close();
+                 }
+            }
+
+            // 4. Add Assets (Recursive)
+            QString projectDir = QFileInfo(project.path).isDir() ? project.path : QFileInfo(project.path).absolutePath();
+            QDirIterator it(projectDir, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+            
+            while (it.hasNext()) {
+                QString filePath = it.next();
+                QFileInfo info(filePath);
+                QString relPath = QDir(projectDir).relativeFilePath(filePath);
+                
+                if (relPath.startsWith("build") || relPath.startsWith("dist") || relPath.startsWith(".")) continue;
+                if (info.suffix() == "dcb" || info.suffix() == "prg") continue;
+                if (info.fileName() == "bgdi" || info.fileName().startsWith("loader_stub")) continue;
+                
+                QFile fAsset(filePath);
+                if (fAsset.open(QIODevice::ReadOnly)) {
+                    filesToEmbed.append({filePath, relPath, fAsset.readAll()});
+                    fAsset.close();
+                }
+            }
+            
+            // 5. Add Icon & Desktop (Optional but good)
+            if (!project.iconPath.isEmpty() && QFile::exists(project.iconPath)) {
+                QFile fIcon(project.iconPath);
+                if (fIcon.open(QIODevice::ReadOnly)) {
+                     filesToEmbed.append({project.iconPath, "icon.png", fIcon.readAll()});
+                     fIcon.close();
+                }
+                
+                // .desktop file
+                QString desktopContent = QString("[Desktop Entry]\nType=Application\nName=%1\nExec=AppRun\nIcon=icon\n")
+                                         .arg(project.name);
+                filesToEmbed.append({"", baseName + ".desktop", desktopContent.toUtf8()});
+            }
+
+            // WRITE
+            QFile stubFile(stubPath);
+            QFile outFile(standalonePath);
+            
+            if (stubFile.open(QIODevice::ReadOnly) && outFile.open(QIODevice::WriteOnly)) {
+                outFile.write(stubFile.readAll());
+                stubFile.close();
+                
+                // TOC
+                 struct TOCEntry {
+                    char path[256];
+                    uint32_t size;
+                };
+                QVector<TOCEntry> toc;
+                
+                for(const auto& file : filesToEmbed) {
+                    outFile.write(file.data); // Write Data
+                    
+                    TOCEntry entry;
+                    memset(&entry, 0, sizeof(entry));
+                    QByteArray pathBytes = file.relativePath.toUtf8();
+                    // Normal slashes for Linux
+                    strncpy(entry.path, pathBytes.constData(), 255);
+                    entry.size = (uint32_t)file.data.size();
+                    toc.append(entry);
+                }
+                
+                // Write TOC
+                 for(const auto& entry : toc) {
+                    outFile.write((const char*)&entry, sizeof(entry));
+                }
+                
+                // Write Footer
+                struct PayloadFooterV3 {
+                    char magic[32]; // BENNUGD2_PAYLOAD_V3
+                    uint32_t numFiles;
+                } footer;
+                 memset(&footer, 0, sizeof(footer));
+                strncpy(footer.magic, "BENNUGD2_PAYLOAD_V3", 31);
+                footer.numFiles = (uint32_t)toc.size();
+                
+                outFile.write((const char*)&footer, sizeof(footer));
+                outFile.close();
+                
+                // Make executable
+                outFile.setPermissions(QFile::ExeUser | QFile::ExeGroup | QFile::ExeOther | QFile::ReadOwner | QFile::ReadGroup | QFile::ReadOther);
+                
+                qDebug() << "Created Linux Standalone:" << standalonePath;
+            } else {
+                 qWarning() << "Failed to create Linux Standalone";
+            }
+
+        } else {
+            qWarning() << "Linux loader stub not found:" << stubPath;
+             // Continue without failing entire publish
+        }
+    }
+
+    // 6. Compress / AppImage
     if (config.generateAppImage) {
         emit progress(90, "Generando AppImage...");
         
@@ -392,13 +588,15 @@ bool Publisher::publishLinux(const ProjectData &project, const PublishConfig &co
     
     // AppImage logic above creates a SEPARATE AppDir.
     
-    emit progress(95, "Comprimiendo (.tar.gz)...");
-    QProcess tar;
-    tar.setWorkingDirectory(config.outputPath);
-    QStringList tarArgs;
-    tarArgs << "-czf" << baseName + ".tar.gz" << baseName;
-    tar.start("tar", tarArgs);
-    tar.waitForFinished();
+    if (config.generateLinuxArchive) {
+        emit progress(95, "Comprimiendo (.tar.gz)...");
+        QProcess tar;
+        tar.setWorkingDirectory(config.outputPath);
+        QStringList tarArgs;
+        tarArgs << "-czf" << baseName + ".tar.gz" << baseName;
+        tar.start("tar", tarArgs);
+        tar.waitForFinished();
+    }
     
     emit progress(100, "¡Listo!");
     return true;
@@ -412,6 +610,26 @@ bool Publisher::publishAndroid(const ProjectData &project, const PublishConfig &
     // Generate internal structure (No external template dependency)
     QString targetName = config.packageName.section('.', -1); 
     QString targetDir = config.outputPath + "/" + targetName;
+    
+    // Clean target dir to avoid ghost files
+    if (QDir(targetDir).exists()) QDir(targetDir).removeRecursively();
+    QDir().mkpath(targetDir);
+    
+    // Copy Gradle Wrapper Template from Runtime
+    QString appPath = QCoreApplication::applicationDirPath();
+    QString runtimeAndroid = appPath + "/runtime/android";
+    QString templateDir = runtimeAndroid + "/template";
+    
+    if (QFile::exists(templateDir + "/gradlew")) {
+        QFile::copy(templateDir + "/gradlew", targetDir + "/gradlew");
+        QFile::copy(templateDir + "/gradlew.bat", targetDir + "/gradlew.bat");
+        
+        QDir().mkpath(targetDir + "/gradle/wrapper");
+        QFile::copy(templateDir + "/gradle/wrapper/gradle-wrapper.jar", targetDir + "/gradle/wrapper/gradle-wrapper.jar");
+        QFile::copy(templateDir + "/gradle/wrapper/gradle-wrapper.properties", targetDir + "/gradle/wrapper/gradle-wrapper.properties");
+    } else {
+        emit progress(5, "ADVERTENCIA: No se encontró plantilla Gradle (gradlew) en runtime/android/template.");
+    }
     
     // 1. Root structure
     QDir().mkpath(targetDir + "/app/src/main/assets");
@@ -436,14 +654,21 @@ bool Publisher::publishAndroid(const ProjectData &project, const PublishConfig &
     }
     
     // 4. local.properties (NDK location)
+    // 4. local.properties (SDK/NDK location)
+    QString sdkDir = qgetenv("ANDROID_HOME");
+    if (sdkDir.isEmpty()) sdkDir = qgetenv("ANDROID_SDK_ROOT");
+    if (sdkDir.isEmpty()) sdkDir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/Android/Sdk";
+    
     QString ndkHome = qgetenv("ANDROID_NDK_HOME");
-    if (!ndkHome.isEmpty()) {
-        QFile lp(targetDir + "/local.properties");
-        if (lp.open(QIODevice::WriteOnly)) {
-             QTextStream(&lp) << "ndk.dir=" << ndkHome << "\n"
-                              << "sdk.dir=" << QStandardPaths::writableLocation(QStandardPaths::HomeLocation) << "/Android/Sdk\n"; // Fallback SDK
-             lp.close();
-        }
+    if (!config.ndkPath.isEmpty()) ndkHome = config.ndkPath; 
+    
+    QFile lp(targetDir + "/local.properties");
+    if (lp.open(QIODevice::WriteOnly)) {
+         QTextStream(&lp) << "sdk.dir=" << sdkDir << "\n";
+         if (!ndkHome.isEmpty()) {
+             QTextStream(&lp) << "ndk.dir=" << ndkHome << "\n";
+         }
+         lp.close();
     }
     
     // 5. build.gradle (Root)
@@ -495,15 +720,16 @@ bool Publisher::publishAndroid(const ProjectData &project, const PublishConfig &
                           << "}\n\n"
                           << "dependencies {\n"
                           << "    implementation 'androidx.appcompat:appcompat:1.6.1'\n"
+                          << "    implementation 'com.google.android.gms:play-services-ads:22.6.0'\n"
+                          << "    implementation 'com.google.android.ump:user-messaging-platform:2.2.0'\n"
+                          << "    implementation 'com.android.billingclient:billing:6.1.0'\n"
                           << "}\n";
         bga.close();
     }
     
     // 7. gradlew wrapper (We should download current wrapper or write a basic script)
     // To be truly professional, we should carry the gradle-wrapper.jar and properties.
-    // For now, let's write a simple shell script asking user to init gradle or just assume they have 'gradle' in path if wrapper fails.
-    // BETTER: Download wrapper if missing.
-    // Actually, writing a minimal gradlew script that invokes 'gradle' is safer if we don't bundle the jar.
+    // For now, let's write a minimal gradlew script that invokes 'gradle' is safer if we don't bundle the jar.
     
     // 8. strings.xml
     QFile strings(targetDir + "/app/src/main/res/values/strings.xml");
@@ -515,6 +741,12 @@ bool Publisher::publishAndroid(const ProjectData &project, const PublishConfig &
     // Continue with java generation...
     
     QString javaSrc = targetDir + "/app/src/main/java";
+    
+    // Copy Runtime Java Sources (SDLActivity, Modules)
+    QString runtimeJava = runtimeAndroid + "/src";
+    if (QDir(runtimeJava).exists()) {
+        copyDir(runtimeJava, javaSrc);
+    }
     
     QString packagePath = config.packageName;
     packagePath.replace(".", "/");
@@ -532,18 +764,121 @@ bool Publisher::publishAndroid(const ProjectData &project, const PublishConfig &
         out << "import org.libsdl.app.SDLActivity;\n";
         out << "import org.libsdl.app.AdsModule;\n";
         out << "import org.libsdl.app.IAPModule;\n";
-        out << "import android.os.Bundle;\n\n";
-        out << "public class " << activityName << " extends SDLActivity {\n";
+        out << "import android.os.Bundle;\n";
+        out << "import java.io.File;\n";
+        out << "import java.io.FileOutputStream;\n";
+        out << "import java.io.IOException;\n";
+        out << "import java.io.InputStream;\n";
+        out << "import java.lang.reflect.Method;\n\n";
+        
+        out << "public class " << activityName << " extends SDLActivity {\n\n";
+        
+        out << "    private void recursiveCopy(String path) {\n";
+        out << "        try {\n";
+        out << "            String[] list = getAssets().list(path);\n";
+        out << "            if (list.length == 0) {\n";
+        out << "                // File\n";
+        out << "                copyAssetFile(path);\n";
+        out << "            } else {\n";
+        out << "                // Directory\n";
+        out << "                File dir = new File(getFilesDir(), path);\n";
+        out << "                if (!dir.exists()) dir.mkdirs();\n";
+        out << "                for (String file : list) {\n";
+        out << "                   if (path.equals(\"\")) recursiveCopy(file);\n";
+        out << "                   else recursiveCopy(path + \"/\" + file);\n";
+        out << "                }\n";
+        out << "            }\n";
+        out << "        } catch (IOException e) { e.printStackTrace(); }\n";
+        out << "    }\n\n";
+        
+        out << "    private void copyAssetFile(String filename) {\n";
+        out << "        if (filename.equals(\"images\") || filename.equals(\"webkit\") || filename.equals(\"sounds\")) return;\n"; // Skip system junk
+        out << "        try {\n";
+        out << "            InputStream in = getAssets().open(filename);\n";
+        out << "            File outFile = new File(getFilesDir(), filename);\n";
+        out << "            // Optimization: Only copy if size differs or not exists? For dev, overwrite always.\n";
+        out << "            FileOutputStream out = new FileOutputStream(outFile);\n";
+        out << "            byte[] buffer = new byte[4096];\n";
+        out << "            int read;\n";
+        out << "            while((read = in.read(buffer)) != -1) {\n";
+        out << "                out.write(buffer, 0, read);\n";
+        out << "            }\n";
+        out << "            in.close();\n";
+        out << "            out.close();\n";
+        out << "        } catch (IOException e) {\n";
+        out << "             // Ignore errors for individual files (might be directories mistaken as files)\n";
+        out << "        }\n";
+        out << "    }\n\n";
+
+        out << "    @Override\n";
+        out << "    protected String[] getLibraries() {\n";
+        out << "        return new String[] {\n";
+        // Base libs
+        QStringList baseLibs = { "ogg", "vorbis", "vorbisfile", "theoradec", "theoraenc", "theora", 
+                                "SDL2", "SDL2_image", "SDL2_mixer", "SDL2_gpu", 
+                                "bgdrtm", "bggfx", "bginput", "bgload", "bgsound", "sdlhandler" };
+        
+        for (const QString &lib : baseLibs) {
+            out << "            \"" << lib << "\",\n";
+        }
+
+        // Scan for ALL modules (libmod_*.so) in runtime to ensure dependencies are met
+        QDir libsDir(runtimeAndroid + "/libs/armeabi-v7a");
+        QStringList filters; filters << "libmod_*.so";
+        for (const QFileInfo &fi : libsDir.entryInfoList(filters, QDir::Files)) {
+             QString name = fi.baseName().mid(3); // remove lib
+             out << "            \"" << name << "\",\n";
+        }
+        
+        out << "            \"main\"\n";
+        out << "        };\n";
+        out << "    }\n";
+        
         out << "    @Override\n";
         out << "    protected void onCreate(Bundle savedInstanceState) {\n";
+        out << "        // 1. Extract EVERYTHING to Internal Storage\n";
+        out << "        android.util.Log.d(\"BennuDebug\", \"Starting Asset Extraction...\");\n";
+        out << "        recursiveCopy(\"\");\n";
+        out << "        \n";
+        out << "        // DEBUG: Check specific file\n";
+        out << "        File testFile = new File(getFilesDir(), \"assets/fpg/level1.fpg\");\n";
+        out << "        android.util.Log.d(\"BennuDebug\", \"CHECK FILE exists: \" + testFile.getAbsolutePath() + \" -> \" + testFile.exists());\n";
+        out << "        \n";
+        out << "        // List root files\n";
+        out << "        File root = getFilesDir();\n";
+        out << "        String[] rootFiles = root.list();\n";
+        out << "        if (rootFiles != null) {\n";
+        out << "             for(String f : rootFiles) android.util.Log.d(\"BennuDebug\", \"ROOT FILE: \" + f);\n";
+        out << "        }\n\n";
+        out << "        // 2. Change Working Directory via Reflection (Robust Loop)\n";
+        out << "        android.util.Log.d(\"BennuDebug\", \"INTENTANDO CHDIR...\");\n";
+        out << "        try {\n";
+        out << "            Class<?> osClass = Class.forName(\"android.system.Os\");\n";
+        out << "            for (Method m : osClass.getMethods()) {\n";
+        out << "                if (m.getName().equals(\"chdir\")) {\n";
+        out << "                    android.util.Log.d(\"BennuDebug\", \"Found chdir method, invoking...\");\n";
+        out << "                    m.invoke(null, getFilesDir().getAbsolutePath());\n";
+        out << "                    android.util.Log.d(\"BennuDebug\", \"CHDIR SUCCESS\");\n";
+        out << "                    break;\n";
+        out << "                }\n";
+        out << "            }\n";
+        out << "        } catch (Throwable e) {\n";
+        out << "            android.util.Log.e(\"BennuDebug\", \"CHDIR FAILED\", e);\n";
+        out << "            e.printStackTrace();\n";
+        out << "        }\n\n";
         out << "        super.onCreate(savedInstanceState);\n";
-        out << "        AdsModule.initialize(this);\n";
-        out << "        IAPModule.initialize(this);\n";
+        out << "        // AdsModule.initialize(this);\n";
+        out << "        // IAPModule.initialize(this);\n";
+        out << "    }\n";
+        out << "    \n";
+        out << "    @Override\n";
+        out << "    protected String[] getArguments() {\n";
+        out << "        return new String[] { new java.io.File(getFilesDir(), \"game.dcb\").getAbsolutePath() };\n";
         out << "    }\n";
         out << "    @Override\n";
         out << "    protected void onPause() {\n";
         out << "        super.onPause();\n";
-        out << "        AdsModule.hideBanner();\n";
+        out << "        // AdsModule.hideBanner();\n";
         out << "    }\n";
         out << "}\n";
         java.close();
@@ -555,125 +890,141 @@ bool Publisher::publishAndroid(const ProjectData &project, const PublishConfig &
     // 4. Copy pre-compiled libraries (libs)
     emit progress(60, "Copiando librerías...");
     
-    QDir appDir(QCoreApplication::applicationDirPath());
-    appDir.cdUp(); // linux-gnu
-    appDir.cdUp(); // build
-    appDir.cdUp(); // BennuGD2 root
+    // Reuse runtimeAndroid
+    bool usedRuntime = false;
     
-    QString modulesDir = appDir.absoluteFilePath("modules"); // Now works
-    QString adsJava = modulesDir + "/libmod_ads/AdsModule.java";
-    QString iapJava = modulesDir + "/libmod_iap/IAPModule.java";
-    
-    QString sdlPackagePath = javaSrc + "/org/libsdl/app";
-    QDir().mkpath(sdlPackagePath);
-    
-    if (QFile::exists(adsJava)) QFile::copy(adsJava, sdlPackagePath + "/AdsModule.java");
-    if (QFile::exists(iapJava)) QFile::copy(iapJava, sdlPackagePath + "/IAPModule.java");
-    
-    // Copy Android native libraries (matching create_android_project.sh logic)
-    // We need to copy from 3 sources:
-    // 1. build/toolchain/bin/*.so (BennuGD runtime and modules)
-    // 2. vendor/android/toolchain/abi/lib/*.so (SDL2, ogg, vorbis, theora)
-    // 3. vendor/sdl-gpu/build/toolchain/SDL_gpu/lib/libSDL2_gpu.so
-    
-    emit progress(65, "Copiando librerías nativas...");
-    
-    // Find project root by searching up from application dir
-    QDir searchDir(QCoreApplication::applicationDirPath());
-    QString projectRoot;
-    for (int i=0; i<8; i++) {
-        if (searchDir.exists("vendor") && searchDir.exists("build")) {
-            projectRoot = searchDir.absolutePath();
-            break;
+    // Try Local Runtime First (Distribution mode)
+    if (QDir(runtimeAndroid + "/libs").exists()) {
+        
+        // Copy Native Libs
+        QStringList abis = { "armeabi-v7a", "arm64-v8a", "x86", "x86_64" };
+        int totalCopied = 0;
+        
+        for (const QString &abi : abis) {
+            QString srcLibDir = runtimeAndroid + "/libs/" + abi;
+            QString destLibDir = targetDir + "/app/src/main/jniLibs/" + abi;
+            
+            if (QDir(srcLibDir).exists()) {
+                QDir().mkpath(destLibDir);
+                QDir dir(srcLibDir);
+                QStringList filters; filters << "*.so";
+                for (const QFileInfo &fi : dir.entryInfoList(filters, QDir::Files)) {
+                    QFile::remove(destLibDir + "/" + fi.fileName());
+                    if (QFile::copy(fi.absoluteFilePath(), destLibDir + "/" + fi.fileName())) {
+                        totalCopied++;
+                    }
+                }
+            }
         }
-        if (searchDir.isRoot() || !searchDir.cdUp()) break;
+        
+        if (totalCopied > 0) {
+            usedRuntime = true;
+            qDebug() << "Used local runtime/android libraries.";
+        }
     }
     
-    if (projectRoot.isEmpty()) {
-        qDebug() << "Error: Could not find BennuGD2 project root";
-        emit progress(65, "ERROR: No se encontró el directorio raíz de BennuGD2");
-    } else {
-        // Map toolchain names to Android ABI names
-        QMap<QString, QString> toolchainToAbi;
-        toolchainToAbi["armv7a-linux-androideabi"] = "armeabi-v7a";
-        toolchainToAbi["aarch64-linux-android"] = "arm64-v8a";
-        toolchainToAbi["i686-linux-android"] = "x86";
-        toolchainToAbi["x86_64-linux-android"] = "x86_64";
+    // Fallback: Search in Project Source Tree (Development mode)
+    if (!usedRuntime) {
+        emit progress(63, "Buscando librerías en árbol de fuentes (modo desarrollo)...");
         
-        QString jniLibsDir = targetDir + "/app/src/main/jniLibs";
+        QDir devDir(appPath); // Renamed from appDir to devDir/searchDir
+        devDir.cdUp(); // linux-gnu
+        devDir.cdUp(); // build
+        devDir.cdUp(); // BennuGD2 root
         
-        bool hasBennuLibs = false;
-        bool hasVendorLibs = false;
+        QString modulesDir = devDir.absoluteFilePath("modules");
+        QString adsJava = modulesDir + "/libmod_ads/AdsModule.java";
+        QString iapJava = modulesDir + "/libmod_iap/IAPModule.java";
         
-        for (auto it = toolchainToAbi.constBegin(); it != toolchainToAbi.constEnd(); ++it) {
-            QString toolchain = it.key();
-            QString abi = it.value();
-            
-            QString abiLibDir = jniLibsDir + "/" + abi;
-            QDir().mkpath(abiLibDir);
-            
-            int copiedCount = 0;
-            
-            // 1. Copy BennuGD libraries from build/toolchain/bin/
-            QString buildBinDir = projectRoot + "/build/" + toolchain + "/bin";
-            if (QDir(buildBinDir).exists()) {
-                QDir binDir(buildBinDir);
-                QStringList filters; 
-                filters << "*.so";
-                
-                for (const QFileInfo &soFile : binDir.entryInfoList(filters, QDir::Files)) {
-                    QString destPath = abiLibDir + "/" + soFile.fileName();
-                    QFile::remove(destPath);
-                    if (QFile::copy(soFile.absoluteFilePath(), destPath)) {
-                        copiedCount++;
-                        hasBennuLibs = true;
-                    }
-                }
+        QString sdlPackagePath = javaSrc + "/org/libsdl/app";
+        QDir().mkpath(sdlPackagePath);
+        
+        if (QFile::exists(adsJava)) QFile::copy(adsJava, sdlPackagePath + "/AdsModule.java");
+        if (QFile::exists(iapJava)) QFile::copy(iapJava, sdlPackagePath + "/IAPModule.java");
+        
+        QDir searchDir(QCoreApplication::applicationDirPath());
+        QString projectRoot;
+        for (int i=0; i<8; i++) {
+            if (searchDir.exists("vendor") && searchDir.exists("build")) {
+                projectRoot = searchDir.absolutePath();
+                break;
             }
-            
-            // 2. Copy SDL2/vendor libraries from vendor/android/toolchain/abi/lib/
-            QString vendorLibDir = projectRoot + "/vendor/android/" + toolchain + "/" + abi + "/lib";
-            if (QDir(vendorLibDir).exists()) {
-                QDir libDir(vendorLibDir);
-                QStringList filters; 
-                filters << "*.so" << "*.so.*";
-                
-                for (const QFileInfo &soFile : libDir.entryInfoList(filters, QDir::Files)) {
-                    QString destPath = abiLibDir + "/" + soFile.fileName();
-                    QFile::remove(destPath);
-                    if (QFile::copy(soFile.absoluteFilePath(), destPath)) {
-                        copiedCount++;
-                        hasVendorLibs = true;
-                    }
-                }
-            }
-            
-            // 3. Copy SDL_gpu from vendor/sdl-gpu/build/toolchain/SDL_gpu/lib/
-            QString sdlGpuLib = projectRoot + "/vendor/sdl-gpu/build/" + toolchain + "/SDL_gpu/lib/libSDL2_gpu.so";
-            if (QFile::exists(sdlGpuLib)) {
-                QString destPath = abiLibDir + "/libSDL2_gpu.so";
-                QFile::remove(destPath);
-                if (QFile::copy(sdlGpuLib, destPath)) {
-                    copiedCount++;
-                }
-            }
-            
-            qDebug() << "Copied" << copiedCount << "libraries to" << abi;
+            if (searchDir.isRoot() || !searchDir.cdUp()) break;
         }
         
-        // Warn if BennuGD libraries are missing
-        if (!hasBennuLibs) {
-            qDebug() << "WARNING: No BennuGD libraries found in build/. Compile BennuGD for Android first.";
-            emit progress(70, "ADVERTENCIA: Faltan librerías de BennuGD. Compila BennuGD para Android primero.");
-        }
-        
-        if (!hasVendorLibs) {
-            qDebug() << "WARNING: No vendor libraries found. Run build-android-deps.sh first.";
+        if (projectRoot.isEmpty()) {
+            qDebug() << "Error: Could not find BennuGD2 project root";
+            emit progress(65, "ERROR: No se encontró el directorio raíz de BennuGD2 ni runtime/android.");
+        } else {
+            QMap<QString, QString> toolchainToAbi;
+            toolchainToAbi["armv7a-linux-androideabi"] = "armeabi-v7a";
+            toolchainToAbi["aarch64-linux-android"] = "arm64-v8a";
+            toolchainToAbi["i686-linux-android"] = "x86";
+            toolchainToAbi["x86_64-linux-android"] = "x86_64";
+            
+            QString jniLibsDir = targetDir + "/app/src/main/jniLibs";
+            
+            bool hasBennuLibs = false;
+            
+            for (auto it = toolchainToAbi.constBegin(); it != toolchainToAbi.constEnd(); ++it) {
+                QString toolchain = it.key();
+                QString abi = it.value();
+                
+                QString abiLibDir = jniLibsDir + "/" + abi;
+                QDir().mkpath(abiLibDir);
+                
+                // 1. Copy BennuGD libraries from build/toolchain/bin/
+                QString buildBinDir = projectRoot + "/build/" + toolchain + "/bin";
+                if (QDir(buildBinDir).exists()) {
+                    QDir binDir(buildBinDir);
+                    QStringList filters; filters << "*.so";
+                    for (const QFileInfo &soFile : binDir.entryInfoList(filters, QDir::Files)) {
+                        QString destPath = abiLibDir + "/" + soFile.fileName();
+                        QFile::remove(destPath);
+                        if (QFile::copy(soFile.absoluteFilePath(), destPath)) hasBennuLibs = true;
+                    }
+                }
+                
+                // 2. Copy SDL2/vendor libraries from vendor/android/toolchain/abi/lib/
+                QString vendorLibDir = projectRoot + "/vendor/android/" + toolchain + "/" + abi + "/lib";
+                if (QDir(vendorLibDir).exists()) {
+                    QDir libDir(vendorLibDir);
+                    QStringList filters; filters << "*.so" << "*.so.*";
+                    for (const QFileInfo &soFile : libDir.entryInfoList(filters, QDir::Files)) {
+                        QString destPath = abiLibDir + "/" + soFile.fileName();
+                        QFile::remove(destPath);
+                        QFile::copy(soFile.absoluteFilePath(), destPath);
+                    }
+                }
+                
+                // 3. Copy SDL_gpu
+                QString sdlGpuLib = projectRoot + "/vendor/sdl-gpu/build/" + toolchain + "/SDL_gpu/lib/libSDL2_gpu.so";
+                if (QFile::exists(sdlGpuLib)) {
+                    QFile::copy(sdlGpuLib, abiLibDir + "/libSDL2_gpu.so");
+                }
+            }
+            
+            if (!hasBennuLibs) {
+                emit progress(70, "ADVERTENCIA: Faltan librerías de BennuGD en entorno de desarrollo.");
+            }
         }
     }
     
     // Manifest & Gradle (Same as before)
     emit progress(40, "Configurando Manifiesto...");
+    
+    // Copy Manifest and Res from Runtime Template
+    QString runtimeManifest = runtimeAndroid + "/src/AndroidManifest.xml";
+    if (QFile::exists(runtimeManifest)) {
+        QFile::remove(targetDir + "/app/src/main/AndroidManifest.xml");
+        QFile::copy(runtimeManifest, targetDir + "/app/src/main/AndroidManifest.xml");
+    }
+    
+    QString runtimeRes = runtimeAndroid + "/res";
+    if (QDir(runtimeRes).exists()) {
+        copyDir(runtimeRes, targetDir + "/app/src/main/res");
+    }
+    
     QString manifestPath = targetDir + "/app/src/main/AndroidManifest.xml";
     QFile manifest(manifestPath);
     if (manifest.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -715,7 +1066,7 @@ bool Publisher::publishAndroid(const ProjectData &project, const PublishConfig &
         return false;
     }
     
-    QString dcbPath = targetDir + "/app/src/main/assets/main.dcb";
+    QString dcbPath = targetDir + "/app/src/main/assets/game.dcb";
     QDir().mkpath(targetDir + "/app/src/main/assets");
     
     QFile::remove(dcbPath);
@@ -725,27 +1076,147 @@ bool Publisher::publishAndroid(const ProjectData &project, const PublishConfig &
     }
     
     // 4. Copy Assets (Same)
-    emit progress(70, "Copiando assets...");
-    copyDir(project.path + "/assets", targetDir + "/app/src/main/assets");
+    // 4. Copy ALL Project Assets (Recursively)
+    emit progress(70, "Copiando contenido del proyecto a assets...");
+    QString assetsDest = targetDir + "/app/src/main/assets";
+    QDir().mkpath(assetsDest);
+    
+    QDir sourceRoot(project.path);
+    QDirIterator it(sourceRoot.absolutePath(), QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    
+    while (it.hasNext()) {
+        QString filesrc = it.next();
+        QString relPath = sourceRoot.relativeFilePath(filesrc);
+        
+        // Filter out unwanted files
+        if (relPath.startsWith("android/") || relPath.startsWith("build/") || 
+            relPath.startsWith("ios/") || relPath.startsWith(".git") || relPath.contains("/.") ||
+            relPath.endsWith(".prg") || relPath.endsWith(".dcb") || 
+            relPath.endsWith(".o") || relPath.endsWith(".a") || relPath.endsWith(".user")) {
+            continue;
+        }
+
+        QString destFile = assetsDest + "/" + relPath;
+        QFileInfo destInfo(destFile);
+        QDir().mkpath(destInfo.absolutePath()); // Create subdirs
+        
+        QFile::remove(destFile);
+        QFile::copy(filesrc, destFile);
+    }
     
     // 5. Copy Libs (Handled earlier via simple vendor copy)
     // Legacy/Complex logic removed to favor direct 'vendor' copy.
     
     // 6. Build APK
-    if (config.generateAPK) {
-        emit progress(80, "Intentando generar APK...");
+    // 6. Build APK or Install
+    if (config.generateAPK || config.installOnDevice) {
+        QString actionName = config.installOnDevice ? "Instalando en dispositivo (esto tarda)..." : "Generando APK...";
+        emit progress(80, actionName);
+        
         QProcess gradleProc;
         gradleProc.setWorkingDirectory(targetDir);
         
-        // Make gradlew executable
+        // Ensure gradlew is executable
         QFile(targetDir + "/gradlew").setPermissions(QFile::ExeUser | QFile::ExeOwner | QFile::ReadOwner | QFile::WriteOwner);
         
-        gradleProc.start("./gradlew", QStringList() << "assembleDebug");
-        if (gradleProc.waitForFinished() && gradleProc.exitCode() == 0) {
-             emit progress(100, "APK Generado!");
+        QString task = config.installOnDevice ? "installDebug" : "assembleDebug";
+        
+        // Use environment ANDROID_HOME if available, otherwise rely on local.properties generated by us or gradle
+        if (!config.ndkPath.isEmpty()) {
+             // NDK path override logic (gradle typically uses local.properties)
+        }
+        
+        // Setup Environment (JAVA_HOME detection)
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        QString javaHome = env.value("JAVA_HOME");
+        
+        if (!config.jdkPath.isEmpty() && QDir(config.jdkPath).exists()) {
+            javaHome = config.jdkPath;
+        }
+        
+        if (javaHome.isEmpty() || !QDir(javaHome).exists()) {
+            QStringList candidates;
+            candidates << "/usr/lib/jvm/java-17-openjdk-amd64"
+                       << "/usr/lib/jvm/default-java"
+                       << "/usr/lib/jvm/java-11-openjdk-amd64"
+                       << QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/android-studio/jbr"
+                       << "/opt/android-studio/jbr"
+                       << "/snap/android-studio/current/jbr";
+                       
+            for (const QString &path : candidates) {
+                if (QDir(path).exists() && (QFile::exists(path + "/bin/java") || QFile::exists(path + "/bin/java.exe"))) {
+                    javaHome = path;
+                    qDebug() << "Auto-detected JAVA_HOME:" << javaHome;
+                    break;
+                }
+            }
+        } // End of detection block
+        
+        if (!javaHome.isEmpty()) {
+            QFile javaBin(javaHome + "/bin/java");
+            javaBin.setPermissions(javaBin.permissions() | QFile::ExeUser | QFile::ExeOwner);
+            
+            env.insert("JAVA_HOME", javaHome);
+            QString pathVar = env.value("PATH");
+            env.insert("PATH", javaHome + "/bin:" + pathVar);
+        }
+        gradleProc.setProcessEnvironment(env);
+        
+        // Execute Gradle Wrapper directly via Java to bypass script detection issues
+        if (!javaHome.isEmpty() && QFile::exists(javaHome + "/bin/java")) {
+            QString javaExe = javaHome + "/bin/java";
+            QStringList args;
+            args << "-Dorg.gradle.appname=gradlew"
+                 << "-classpath" << "gradle/wrapper/gradle-wrapper.jar"
+                 << "org.gradle.wrapper.GradleWrapperMain"
+                 << task;
+            
+            qDebug() << "Executing Manual Gradle:" << javaExe << args;
+            gradleProc.start(javaExe, args);
+        } else {
+            // Fallback
+            gradleProc.start("./gradlew", QStringList() << task);
+        }
+        
+        if (gradleProc.waitForFinished(-1) && gradleProc.exitCode() == 0) {
+             if (config.installOnDevice) {
+                 emit progress(95, "Ejecutando App...");
+                 
+                 // Resolve adb path
+                 QString adbExe = "adb";
+                 QString sdk = env.value("ANDROID_HOME");
+                 if (sdk.isEmpty()) sdk = QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/Android/Sdk";
+                 if (QFile::exists(sdk + "/platform-tools/adb")) adbExe = sdk + "/platform-tools/adb";
+
+                 // Launch app using adb monkey trick (launches main activity of package)
+                 QProcess adb;
+                 adb.start(adbExe, QStringList() << "shell" << "monkey" << "-p" << config.packageName << "-c" << "android.intent.category.LAUNCHER" << "1");
+                 adb.waitForFinished();
+                 
+                 // Launch Logcat helper
+                 #ifdef Q_OS_LINUX
+                 QProcess::startDetached("x-terminal-emulator", QStringList() << "-e" << QString(adbExe + " logcat -s SDL:V bgdi-native:V ActivityManager:I AndroidRuntime:E"));
+                 // Fallback if x-terminal-emulator not found? user usually has one mapped.
+                 #endif
+             }
+             
+             QString successMsg = config.installOnDevice ? "¡Instalado y Ejecutado!" : "APK Generado Exitosamente!";
+             emit progress(100, successMsg);
+             
+             if (config.generateAPK && !config.installOnDevice) {
+                 QString apkDir = targetDir + "/app/build/outputs/apk/debug";
+                 QDesktopServices::openUrl(QUrl::fromLocalFile(apkDir));
+             }
              return true;
         } else {
-             emit finished(false, "Falló la compilación de Gradle. Posiblemente faltan librerías .so de BennuGD en 'jniLibs'.");
+             QString err = gradleProc.readAllStandardError();
+             if (err.isEmpty()) err = gradleProc.readAllStandardOutput(); // Sometimes gradle prints error to stdout
+             
+             QString advice = config.installOnDevice ? "Verifica que tienes dispositivo conectado y depuración USB." : "Verifica configuración de SDK/Java.";
+             if (javaHome.isEmpty()) advice += "\nJAVA_HOME no encontrado. Instala JDK 17+.";
+             
+             QString debugInfo = "\nDEBUG: JAVA_HOME=" + javaHome;
+             emit finished(false, "Falló Gradle (" + task + "):\n" + err + "\n\n" + advice + debugInfo);
              return false;
         }
     }
@@ -955,63 +1426,146 @@ bool Publisher::publishWindows(const ProjectData &project, const PublishConfig &
         if (QFile::exists(stubPath)) {
             qDebug() << "Found loader stub at:" << stubPath;
             
-            // Files to concatenate: [STUB] + [BGDI] + [DCB] + [FOOTER]
-            QFile stubFile(stubPath);
+            // --- V3 PACKAGING SYSTEM ---
+            // We needed a more flexible way to include assets recursively.
+            // Format: [STUB] + [FILE_1_DATA] + ... + [FILE_N_DATA] + [TOC] + [FOOTER]
+            
+            struct FileToEmbed {
+                QString sourcePath;
+                QString relativePath; // Path relative to execution root (e.g. "bgdi.exe", "assets/player.png")
+                QByteArray data;
+            };
+            QVector<FileToEmbed> filesToEmbed;
+            
+            // 1. Add BGDI.EXE
             QFile bgdiFile(destBgdiPath);
+            if (bgdiFile.open(QIODevice::ReadOnly)) {
+                filesToEmbed.append({destBgdiPath, "bgdi.exe", bgdiFile.readAll()});
+                bgdiFile.close();
+            } else {
+                 emit finished(false, "No se pudo leer bgdi.exe para empaquetado.");
+                 return false;
+            }
+            
+            // 2. Add Game DCB
             QFile dcbFile(destDcbPath);
+            QString dcbName = baseName + ".dcb";
+            if (dcbFile.open(QIODevice::ReadOnly)) {
+                filesToEmbed.append({destDcbPath, dcbName, dcbFile.readAll()});
+                dcbFile.close();
+                qDebug() << "Added main game file:" << dcbName;
+            } else {
+                 emit finished(false, "No se pudo leer el archivo .dcb para empaquetado.");
+                 return false;
+            }
+
+            // 3. Add DLLs
+            QDir runtimeDirObj(runtimeDir);
+            QStringList dllFilters;
+            dllFilters << "*.dll";
+            QFileInfoList dllFiles = runtimeDirObj.entryInfoList(dllFilters, QDir::Files);
+            for (const QFileInfo &dllInfo : dllFiles) {
+                QFile f(dllInfo.absoluteFilePath());
+                if (f.open(QIODevice::ReadOnly)) {
+                    filesToEmbed.append({dllInfo.absoluteFilePath(), dllInfo.fileName(), f.readAll()});
+                    f.close();
+                }
+            }
+            
+            // 4. Add ASSETS (Recursive from project dir)
+            // We want to include everything in the project dir EXCEPT:
+            // - The .dcb file (already added)
+            // - The build/dist directories
+            // - Hidden files
+            // - Source code files (.prg, .c, .h, .cpp) - Optional: user might want to hide source
+            
+            QString projectDir = QFileInfo(project.path).isDir() ? project.path : QFileInfo(project.path).absolutePath();
+            QDir projectDirObj(projectDir);
+            
+            // Use QDirIterator for recursive scanning
+            QDirIterator it(projectDir, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+            
+            qDebug() << "Scanning for assets in:" << projectDir;
+            int assetsCount = 0;
+            
+            while (it.hasNext()) {
+                QString filePath = it.next();
+                QFileInfo info(filePath);
+                QString relPath = projectDirObj.relativeFilePath(filePath);
+                
+                // Filtering
+                if (relPath.startsWith("build") || relPath.startsWith("dist") || relPath.startsWith(".")) continue;
+                if (info.suffix() == "dcb" || info.suffix() == "prg") continue; // Skip redundant binaries/source
+                if (info.fileName() == "bgdi.exe" || info.fileName() == "loader_stub.exe") continue;
+                
+                QFile f(filePath);
+                if (f.open(QIODevice::ReadOnly)) {
+                    filesToEmbed.append({filePath, relPath, f.readAll()});
+                    f.close();
+                    assetsCount++;
+                }
+            }
+            qDebug() << "Added" << assetsCount << "asset files.";
+
+            // --- WRITE OUTPUT ---
+            QFile stubFile(stubPath);
             QFile outFile(standaloneExePath);
             
-            if (stubFile.open(QIODevice::ReadOnly) && 
-                bgdiFile.open(QIODevice::ReadOnly) && 
-                dcbFile.open(QIODevice::ReadOnly) && 
-                outFile.open(QIODevice::WriteOnly)) {
+            if (stubFile.open(QIODevice::ReadOnly) && outFile.open(QIODevice::WriteOnly)) {
                 
-                // 1. Write Stub
+                // A. Write Stub
                 outFile.write(stubFile.readAll());
+                stubFile.close();
                 
-                // 2. Write BGDI
-                QByteArray bgdiData = bgdiFile.readAll();
-                outFile.write(bgdiData);
+                // B. Write Files Data
+                struct TOCEntry {
+                    char path[256];
+                    uint32_t size;
+                };
+                QVector<TOCEntry> toc;
                 
-                // 3. Write DCB
-                QByteArray dcbData = dcbFile.readAll();
-                outFile.write(dcbData);
+                for(const auto& file : filesToEmbed) {
+                    outFile.write(file.data);
+                    
+                    TOCEntry entry;
+                    memset(&entry, 0, sizeof(entry));
+                    
+                    // Convert relative path to standard backslashes for Windows, or keep forward slash (stub handles normalization)
+                    QByteArray pathBytes = file.relativePath.toUtf8();
+                    strncpy(entry.path, pathBytes.constData(), 255);
+                    entry.size = (uint32_t)file.data.size();
+                    
+                    toc.append(entry);
+                }
                 
-                // 4. Create and Write Footer
-                struct PayloadFooter {
-                    char magic[32];
-                    uint32_t bgdiSize;
-                    uint32_t dcbSize;
-                    char dcbName[16];
+                // C. Write TOC
+                for(const auto& entry : toc) {
+                    outFile.write((const char*)&entry, sizeof(entry));
+                }
+                
+                // D. Write Footer V3
+                struct PayloadFooterV3 {
+                    char magic[32]; // BENNUGD2_PAYLOAD_V3
+                    uint32_t numFiles;
                 } footer;
                 
                 memset(&footer, 0, sizeof(footer));
-                strncpy(footer.magic, "BENNUGD2_PAYLOAD_MARKER_V1", 31);
-                footer.bgdiSize = (uint32_t)bgdiData.size();
-                footer.dcbSize = (uint32_t)dcbData.size();
-                
-                // Use fixed simplified name for extracted dcb to avoid encoding issues
-                QString dcbName = baseName + ".dcb";
-                QByteArray dcbNameBytes = dcbName.toUtf8();
-                strncpy(footer.dcbName, dcbNameBytes.constData(), 15);
+                strncpy(footer.magic, "BENNUGD2_PAYLOAD_V3", 31);
+                footer.numFiles = (uint32_t)toc.size();
                 
                 outFile.write((const char*)&footer, sizeof(footer));
-                
-                stubFile.close();
-                bgdiFile.close();
-                dcbFile.close();
                 outFile.close();
                 
                 createdStandalone = true;
-                qDebug() << "Created standalone executable via concatenation:" << standaloneExePath;
+                qDebug() << "Created V3 standalone executable with" << toc.size() << "total files.";
                 
             } else {
-                qWarning() << "Failed to open files for concatenation";
+                 emit finished(false, "Error al escribir el ejecutable autónomo.");
+                 return false;
             }
         } else {
             qWarning() << "Loader stub not found at:" << stubPath;
-            emit finished(false, "No se encontró el archivo 'loader_stub.exe'.\n"
-                                 "Este archivo es necesario para crear ejecutables autónomos.");
+            emit finished(false, "No se encontró el archivo 'loader_stub.exe'.");
             return false;
         }
     }
@@ -1172,6 +1726,292 @@ bool Publisher::publishWindows(const ProjectData &project, const PublishConfig &
     }
     }
     
+    return true;
+}
+
+bool Publisher::publishSwitch(const ProjectData &project, const PublishConfig &config)
+{
+    emit progress(10, "Preparando entorno Switch...");
+    
+    QString baseName = project.name.simplified().replace(" ", "_");
+    QString distDir = config.outputPath + "/" + baseName;
+    
+    // Clean previous
+    if (QDir(distDir).exists()) QDir(distDir).removeRecursively();
+    QDir().mkpath(distDir);
+    
+    // Find Runtime (bgdi.elf)
+    emit progress(20, "Buscando runtime (bgdi.elf)...");
+    QString bgdiPath;
+    
+    // Prefer "runtime/switch" relative to app
+    QString appDir = QCoreApplication::applicationDirPath();
+    QStringList candidates;
+    candidates << appDir + "/runtime/switch/bgdi.elf"
+               << appDir + "/../runtime/switch/bgdi.elf"
+               << appDir + "/bgdi.elf"
+               << QDir::currentPath() + "/bgdi.elf";
+               
+    for(const QString &c : candidates) {
+        if (QFile::exists(c)) {
+            bgdiPath = c;
+            break;
+        }
+    }
+    
+    if (bgdiPath.isEmpty()) {
+        emit finished(false, "No se encontró bgdi.elf para Switch.\n"
+                             "Asegúrate de haber compilado para Switch y que el archivo esté en 'runtime/switch/'.");
+        return false;
+    }
+    
+    // Find Tools
+    emit progress(30, "Buscando herramientas (nacptool, elf2nro)...");
+    QString nacptool = "nacptool";
+    QString elf2nro = "elf2nro";
+    
+    // Check DEVKITPRO env first (as baseline)
+    QString devkitPro = qgetenv("DEVKITPRO");
+    if (!devkitPro.isEmpty()) {
+        QString toolsBin = devkitPro + "/tools/bin";
+        if (QFile::exists(toolsBin + "/nacptool")) nacptool = toolsBin + "/nacptool";
+        if (QFile::exists(toolsBin + "/elf2nro")) elf2nro = toolsBin + "/elf2nro";
+    }
+    
+    // Check local runtime tools overrides (Priority)
+    QStringList searchPaths;
+    searchPaths << appDir 
+                << appDir + "/tools"
+                << appDir + "/runtime/switch" 
+                << appDir + "/runtime/switch/tools";
+
+    for (const QString &path : searchPaths) {
+        if (QFile::exists(path + "/nacptool")) nacptool = path + "/nacptool";
+        if (QFile::exists(path + "/elf2nro")) elf2nro = path + "/elf2nro";
+    }
+    
+    // Prepare RomFS directory for embedding
+    QString romfsDir = distDir + "/romfs";
+    QDir().mkpath(romfsDir);
+
+    // 1. Copy Compiled Game (.dcb)
+    emit progress(40, "Copiando juego compilado al RomFS...");
+    
+    // Use project main script base name for DCB
+    QFileInfo scriptInfo(project.path + "/" + project.mainScript);
+    QString dcbName = scriptInfo.baseName() + ".dcb";
+    QString sourceDcbPath = scriptInfo.absolutePath() + "/" + dcbName;
+    
+    // Fallback if not found (maybe not compiled yet?)
+    if (!QFile::exists(sourceDcbPath)) {
+        emit finished(false, "No se encontró el archivo compilado (.dcb).\nCompila el proyecto antes de publicar.");
+        return false;
+    }
+    
+    // Copy as game.dcb (Switch standard) inside romfs
+    QFile::copy(sourceDcbPath, romfsDir + "/game.dcb");
+
+    // 2. Copy Assets
+    emit progress(50, "Copiando assets al RomFS...");
+    // Copy into romfs/assets
+    QDir assetsDest(romfsDir + "/assets");
+    assetsDest.mkpath(".");
+    copyDir(project.path + "/assets", romfsDir + "/assets");
+
+    // 3. Generate NACP (Control file)
+    emit progress(70, "Generando metadatos (NACP)...");
+    QString nacpFile = distDir + "/control.nacp";
+    QString version = !project.version.isEmpty() ? project.version : "1.0.0";
+    
+    QProcess nacpProc;
+    nacpProc.setWorkingDirectory(distDir);
+    
+    // nacptool --create "Title" "Author" "Version" control.nacp
+    QStringList nacpArgs;
+    nacpArgs << "--create" << project.name << config.switchAuthor << version << "control.nacp";
+    
+    nacpProc.start(nacptool, nacpArgs);
+    if (!nacpProc.waitForFinished() || nacpProc.exitCode() != 0) {
+        qWarning() << "nacptool failed or not found:" << nacpProc.readAllStandardError();
+    }
+
+    // 4. Generate NRO
+    emit progress(80, "Generando NRO (embebido)...");
+    QString nroFile = distDir + "/" + baseName + ".nro";
+    
+    QStringList nroArgs;
+    nroArgs << bgdiPath << nroFile;
+    if (QFile::exists(nacpFile)) nroArgs << "--nacp=" + nacpFile;
+    
+    if (!config.iconPath.isEmpty() && QFile::exists(config.iconPath)) {
+         nroArgs << "--icon=" + config.iconPath;
+    }
+    
+    // RomFS embedding
+    nroArgs << "--romfsdir=" + romfsDir;
+    
+    QProcess nroProc;
+    nroProc.start(elf2nro, nroArgs);
+    if (!nroProc.waitForFinished() || nroProc.exitCode() != 0) {
+        QString err = nroProc.readAllStandardError();
+        emit finished(false, "Error al generar ejecutable NRO:\n" + err + 
+                             "\n\nVerifica que 'elf2nro' está en el PATH o en devkitPro/tools/bin.\n" +
+                             "Verifica que el icono es formato soportado (JPG 256x256 por lo general).");
+        return false;
+    }
+    
+    // Cleanup temporary files
+    QFile::remove(nacpFile);
+    QDir(romfsDir).removeRecursively(); // Clean romfs source
+
+    emit progress(100, "¡Publicación Switch completada!");
+    QDesktopServices::openUrl(QUrl::fromLocalFile(distDir));
+    return true;
+}
+
+bool Publisher::publishWeb(const ProjectData &project, const PublishConfig &config)
+{
+    emit progress(10, "Preparando entorno Web...");
+    
+    QString baseName = project.name.simplified().replace(" ", "_");
+    QString distDir = config.outputPath + "/web_" + baseName;
+    
+    // Clean
+    if (QDir(distDir).exists()) QDir(distDir).removeRecursively();
+    QDir().mkpath(distDir);
+    
+    // 1. Find Runtime (bgdi.js, bgdi.wasm, bgdi.html)
+    emit progress(20, "Buscando runtime Web...");
+    QString appDir = QCoreApplication::applicationDirPath();
+    QString webRuntime = appDir + "/runtime/web";
+    
+    if (!QFile::exists(webRuntime + "/bgdi.wasm")) {
+        // Fallback relative to project for dev
+        webRuntime = appDir + "/../runtime/web";
+    }
+    
+    if (!QFile::exists(webRuntime + "/bgdi.wasm")) {
+        emit finished(false, "No se encontró el runtime web (bgdi.wasm, bgdi.js).\nVerifica la carpeta runtime/web/.");
+        return false;
+    }
+    
+    // Copy runtime files
+    QFile::copy(webRuntime + "/bgdi.wasm", distDir + "/bgdi.wasm");
+    QFile::copy(webRuntime + "/bgdi.js", distDir + "/bgdi.js");
+    
+    // HTML Template
+    QString htmlSource = webRuntime + "/bgdi.html";
+    if (QFile::exists(htmlSource)) {
+        QFile::copy(htmlSource, distDir + "/index.html");
+    } else {
+        emit finished(false, "Falta bgdi.html en runtime/web/.");
+        return false;
+    }
+
+    // 2. Compile DCB
+    emit progress(30, "Compilando juego...");
+    QFileInfo scriptInfo(project.path + "/" + project.mainScript);
+    QString dcbName = "game.dcb"; // Always use game.dcb for web loader convenience
+    QString sourceDcbPath = scriptInfo.absolutePath() + "/" + scriptInfo.baseName() + ".dcb";
+    
+    // Check if compiled (we are the publisher, assume calling code ensured compilation or we check)
+    if (!QFile::exists(sourceDcbPath)) {
+         emit finished(false, "El juego no está compilado (.dcb no encontrado).\nCompila el proyecto antes de publicar.");
+         return false;
+    }
+    
+    // 3. Prepare Assets for Packaging
+    emit progress(40, "Preparando assets...");
+    QString dataSrcDir = config.outputPath + "/_web_data_tmp";
+    if (QDir(dataSrcDir).exists()) QDir(dataSrcDir).removeRecursively();
+    QDir().mkpath(dataSrcDir);
+    
+    // Copy dcb as game.dcb
+    QFile::copy(sourceDcbPath, dataSrcDir + "/game.dcb");
+    
+    // Copy assets
+    copyDir(project.path + "/assets", dataSrcDir + "/assets");
+    
+    // 4. Run file_packager.py
+    emit progress(60, "Empaquetando assets (file_packager)...");
+    
+    QString python = "python3"; 
+    // Check python
+    QProcess checkPy;
+    checkPy.start("python3", QStringList() << "--version");
+    if (!checkPy.waitForFinished() || checkPy.exitCode() != 0) python = "python";
+    
+    // Find file_packager.py
+    // Priority: 1. runtime/web/tools, 2. EMSDK
+    QString packagerScript;
+    if (QFile::exists(webRuntime + "/tools/file_packager.py")) {
+        packagerScript = webRuntime + "/tools/file_packager.py";
+    } else if (!config.emsdkPath.isEmpty()) {
+        QStringList candidates;
+        candidates << "/upstream/emscripten/tools/file_packager.py"
+                   << "/upstream/emscripten/file_packager.py"
+                   << "/fastcomp/emscripten/tools/file_packager.py";
+                   
+        for(const QString &c : candidates) {
+            if (QFile::exists(config.emsdkPath + c)) {
+                packagerScript = config.emsdkPath + c;
+                break;
+            }
+        }
+    }
+    
+    if (packagerScript.isEmpty()) {
+        emit finished(false, "No se encontró 'file_packager.py'.\nInstala EMSDK desde el diálogo o pon la herramienta en 'runtime/web/tools/'.");
+        QDir(dataSrcDir).removeRecursively();
+        return false;
+    }
+    
+    // Arguments: file_packager.py game.data --preload source@/ --js-output=game.data.js --no-heap-copy
+    QString dataFile = distDir + "/game.data";
+    QString jsDataFile = distDir + "/game.data.js";
+    
+    QStringList args;
+    args << packagerScript << dataFile 
+         << "--preload" << dataSrcDir + "@/" // Map dataSrcDir root to emscripten root /
+         << "--js-output=" + jsDataFile
+         << "--no-heap-copy";
+         
+    QProcess packager;
+    packager.setWorkingDirectory(distDir);
+    packager.start(python, args);
+    
+    if (!packager.waitForFinished() || packager.exitCode() != 0) {
+        QString err = packager.readAllStandardError();
+        emit finished(false, "Error ejecutando file_packager.py:\n" + err); 
+        QDir(dataSrcDir).removeRecursively();
+        return false;
+    }
+    
+    // Cleanup tmp data
+    QDir(dataSrcDir).removeRecursively();
+    
+    // 5. Update HTML Title
+    emit progress(90, "Finalizando HTML...");
+    QFile html(distDir + "/index.html");
+    if (html.open(QIODevice::ReadWrite | QIODevice::Text)) {
+        QString content = html.readAll();
+        content.replace("BennuGD Web Game", config.webTitle);
+        content.replace("{{TITLE}}", config.webTitle);
+        
+        // Inject script tag for game.data.js if not present
+        if (!content.contains("game.data.js")) {
+             content.replace("</body>", "<script src=\"game.data.js\"></script>\n</body>");
+        }
+        
+        html.seek(0);
+        html.write(content.toUtf8());
+        html.resize(html.pos());
+        html.close();
+    }
+
+    emit progress(100, "¡Publicación Web completada!");
+    QDesktopServices::openUrl(QUrl::fromLocalFile(distDir));
+    emit finished(true, "Publicación Web completada exitosamente.\nOUTPUT:" + distDir);
     return true;
 }
 

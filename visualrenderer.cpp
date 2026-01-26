@@ -816,7 +816,7 @@ void VisualRenderer::loadTexture(int id, const QImage &image)
     }
     
     // Create new texture
-    QOpenGLTexture *texture = new QOpenGLTexture(image.flipped(Qt::Vertical));
+    QOpenGLTexture *texture = new QOpenGLTexture(image.mirrored(false, true));
     texture->setMinificationFilter(QOpenGLTexture::Linear);
     texture->setMagnificationFilter(QOpenGLTexture::Linear);
     texture->setWrapMode(QOpenGLTexture::Repeat);

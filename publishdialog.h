@@ -7,6 +7,8 @@
 #include <QCheckBox>
 #include <QProgressBar>
 #include <QStandardPaths>
+#include <QLabel>
+#include <QPushButton>
 #include "projectmanager.h"
 #include "publisher.h"
 #include "downloader.h"
@@ -24,11 +26,13 @@ private slots:
     void onPublish();
     void onPlatformChanged(int index);
     void onDownloadAppImageTool();
-    void onDownloadNDK(); // NEW // NEW
-    void refreshWindowsTools(); // Refresh detection of Windows tools
+    void onDownloadNDK();
+    void onInstallEmsdk();
+    void onInstallJDK();
+    void refreshWindowsTools();
 
 private:
-    QString findToolPath(const QString &toolName); // Helper to find tools aggressively
+    QString findToolPath(const QString &toolName);
     ProjectData *m_project;
     Publisher m_publisher;
     
@@ -43,7 +47,12 @@ private:
     // Linux Options
     QWidget *m_linuxOptions;
     QCheckBox *m_chkLinuxArchive;
+    QCheckBox *m_chkLinuxStandalone;
     QCheckBox *m_chkLinuxAppImage;
+
+    // Switch Options
+    QWidget *m_switchOptions;
+    QLineEdit *m_switchAuthorEdit;
 
     // Windows Options
     QWidget *m_windowsOptions;
@@ -59,12 +68,24 @@ private:
     QLineEdit *m_iconPathEdit;
     QCheckBox *m_chkAndroidProject;
     QCheckBox *m_chkAndroidAPK;
+    QCheckBox *m_chkInstallDevice;
+    
+    QLabel *m_jdkStatusLabel;
+    QPushButton *m_installJdkBtn;
+    QString m_currentJdkPath;
+
+    // Web Options
+    QWidget *m_webOptions;
+    QLineEdit *m_webTitleEdit;
+    QPushButton *m_installEmsdkBtn;
+    QLabel *m_emsdkStatusLabel;
 
     QProgressBar *m_progressBar;
     QPushButton *m_publishButton;
-    QPushButton *m_closeButton; // Rename to Close or Cancel
+    QPushButton *m_closeButton;
 
     void setupUI();
+    void checkAndroidTools();
 };
 
 #endif // PUBLISHDIALOG_H

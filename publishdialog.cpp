@@ -11,10 +11,13 @@
 #include <QTimer>
 #include <QDebug>
 #include <QDesktopServices>
+#include <QProcess>
+#include <QProgressDialog>
 #include <QUrl>
 #include <QClipboard>
 #include <QApplication>
 #include <QFrame>
+#include <QSettings>
 
 PublishDialog::PublishDialog(ProjectData *project, QWidget *parent)
     : QDialog(parent), m_project(project)
@@ -41,8 +44,9 @@ void PublishDialog::setupUI()
     m_platformCombo = new QComboBox();
     m_platformCombo->addItem(tr("Linux (64-bit)"), Publisher::Linux);
     m_platformCombo->addItem(tr("Windows (64-bit)"), Publisher::Windows);
-    // Android disabled - BennuGD2 doesn't support Android compilation yet
-    // m_platformCombo->addItem(tr("Android"), Publisher::Android);
+    m_platformCombo->addItem(tr("Nintendo Switch (Homebrew)"), Publisher::Switch);
+    m_platformCombo->addItem(tr("HTML5 / Web (Emscripten)"), Publisher::Web);
+    m_platformCombo->addItem(tr("Android (APK / Project)"), Publisher::Android);
     
     topLayout->addRow(tr("Plataforma Destino:"), m_platformCombo);
     
@@ -79,6 +83,9 @@ void PublishDialog::setupUI()
     m_chkLinuxArchive->setChecked(true);
     m_chkLinuxArchive->setToolTip(tr("Incluye ejecutable, librerías y script de lanzamiento"));
     
+    m_chkLinuxStandalone = new QCheckBox(tr("Ejecutable Autónomo (Experimental)"));
+    m_chkLinuxStandalone->setToolTip(tr("Crea un único archivo ELF que contiene todo el juego (estilo AppImage ligero)"));
+    
     m_chkLinuxAppImage = new QCheckBox(tr("Crear AppImage"));
     
     QHBoxLayout *appImageLayout = new QHBoxLayout();
@@ -109,6 +116,8 @@ void PublishDialog::setupUI()
     m_chkLinuxAppImage->setText(hasAppImageTool ? tr("Crear AppImage (Disponible)") : tr("Crear AppImage (Falta herramienta)"));
     dlAppImageBtn->setVisible(!hasAppImageTool);
 
+    linuxGroupLayout->addWidget(m_chkLinuxArchive);
+    linuxGroupLayout->addWidget(m_chkLinuxStandalone);
     linuxGroupLayout->addLayout(appImageLayout);
     linuxLayout->addWidget(linuxGroup);
     linuxLayout->addStretch();
@@ -208,6 +217,59 @@ void PublishDialog::setupUI()
     windowsLayout->addWidget(windowsGroup);
     windowsLayout->addStretch();
     
+    // === SWITCH OPTIONS ===
+    m_switchOptions = new QWidget();
+    QVBoxLayout *switchLayout = new QVBoxLayout(m_switchOptions);
+    QGroupBox *switchGroup = new QGroupBox(tr("Opciones de Switch"));
+    QFormLayout *switchForm = new QFormLayout(switchGroup);
+    
+    m_switchAuthorEdit = new QLineEdit();
+    m_switchAuthorEdit->setText("BennuGD User");
+    m_switchAuthorEdit->setPlaceholderText("Nombre del Autor");
+    switchForm->addRow(tr("Autor:"), m_switchAuthorEdit);
+    
+    QLabel *switchInfo = new QLabel(tr(
+        "<b>Nota:</b> Se requiere <b>devkitPro</b> instalado y configurar las rutas de las herramientas (nacptool, elf2nro.exe) o tenerlas en el PATH.<br>"
+        "Se generará un archivo .nro listo para Homebrew Launcher."));
+    switchInfo->setWordWrap(true);
+    switchInfo->setStyleSheet("color: #666; font-size: 10pt;");
+    
+    switchLayout->addWidget(switchGroup);
+    switchLayout->addWidget(switchInfo);
+    switchLayout->addStretch();
+
+    // === WEB OPTIONS ===
+    m_webOptions = new QWidget();
+    QVBoxLayout *webLayout = new QVBoxLayout(m_webOptions);
+    QGroupBox *webGroup = new QGroupBox(tr("Opciones de Web"));
+    QFormLayout *webForm = new QFormLayout(webGroup);
+    
+    m_webTitleEdit = new QLineEdit();
+    m_webTitleEdit->setPlaceholderText(tr("Mi Juego Web"));
+    webForm->addRow(tr("Título de Página:"), m_webTitleEdit);
+    
+    // EMSDK Check
+    QHBoxLayout *emsdkLayout = new QHBoxLayout();
+    m_emsdkStatusLabel = new QLabel(tr("Buscando..."));
+    m_installEmsdkBtn = new QPushButton(tr("Instalar/Configurar"));
+    connect(m_installEmsdkBtn, &QPushButton::clicked, this, &PublishDialog::onInstallEmsdk);
+    
+    emsdkLayout->addWidget(new QLabel(tr("Estado EMSDK:")));
+    emsdkLayout->addWidget(m_emsdkStatusLabel);
+    emsdkLayout->addWidget(m_installEmsdkBtn);
+    
+    webLayout->addWidget(webGroup);
+    webLayout->addLayout(emsdkLayout);
+    
+    QLabel *webInfo = new QLabel(tr(
+        "Se usará 'bgdi.wasm' precompilado (carpeta runtime/web/).\n"
+        "Los assets se empaquetarán con 'file_packager.py' (requiere Python y EMSDK).\n"
+        "Si no tienes EMSDK, puedes intentar instalarlo aquí o usar el del sistema."));
+    webInfo->setWordWrap(true);
+    webInfo->setStyleSheet("color: #666; font-size: 10pt;");
+    webLayout->addWidget(webInfo);
+    webLayout->addStretch();
+
     // === ANDROID OPTIONS ===
     m_androidOptions = new QWidget();
     QVBoxLayout *androidLayout = new QVBoxLayout(m_androidOptions);
@@ -251,6 +313,24 @@ void PublishDialog::setupUI()
     androidForm->addRow(m_chkAndroidProject);
     androidForm->addRow(apkLayout); // Layout with button
     
+    // JDK UI
+    QHBoxLayout *jdkLayout = new QHBoxLayout();
+    m_jdkStatusLabel = new QLabel(tr("Buscando..."));
+    m_installJdkBtn = new QPushButton(QIcon::fromTheme("download"), tr("Instalar JDK Portable"));
+    connect(m_installJdkBtn, &QPushButton::clicked, this, &PublishDialog::onInstallJDK);
+    
+    jdkLayout->addWidget(new QLabel("JDK (Java):"));
+    jdkLayout->addWidget(m_jdkStatusLabel);
+    jdkLayout->addWidget(m_installJdkBtn);
+    androidForm->addRow(jdkLayout);
+    
+    m_chkInstallDevice = new QCheckBox(tr("Instalar y ejecutar en dispositivo"));
+    m_chkInstallDevice->setToolTip(tr("Instala el APK generado y ejecuta la app.\nRequiere depuración USB."));
+    m_chkInstallDevice->setEnabled(false);
+    connect(m_chkAndroidAPK, &QCheckBox::toggled, m_chkInstallDevice, &QCheckBox::setEnabled);
+    
+    androidForm->addRow(m_chkInstallDevice);
+    
     androidLayout->addWidget(androidGroup);
     
     QLabel *androidInfo = new QLabel(tr("Nota: Se generará un proyecto completo con Gradle.\n"
@@ -263,6 +343,8 @@ void PublishDialog::setupUI()
     
     optionsStack->addWidget(m_linuxOptions);
     optionsStack->addWidget(m_windowsOptions);
+    optionsStack->addWidget(m_switchOptions);
+    optionsStack->addWidget(m_webOptions);
     optionsStack->addWidget(m_androidOptions);
     
     mainLayout->addWidget(optionsStack);
@@ -311,12 +393,42 @@ void PublishDialog::setupUI()
         m_closeButton->setEnabled(true);
         m_progressBar->setVisible(false);
         if (success) {
-            QMessageBox::information(this, tr("Publicación Exitosa"), msg);
-            accept();
+            QString cleanMsg = msg;
+            QString outputDir;
+            if (msg.contains("OUTPUT:")) {
+                int idx = msg.indexOf("OUTPUT:");
+                outputDir = msg.mid(idx + 7).trimmed();
+                cleanMsg = msg.left(idx).trimmed();
+            }
+
+            if (!outputDir.isEmpty() && m_platformCombo->currentData().toInt() == Publisher::Web) {
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle(tr("Publicación Exitosa"));
+                msgBox.setText(cleanMsg + "\n\n¿Quieres probar el juego ahora?");
+                msgBox.setIcon(QMessageBox::Information);
+                QPushButton *openBtn = msgBox.addButton(tr("Abrir Carpeta"), QMessageBox::ActionRole);
+                QPushButton *testBtn = msgBox.addButton(tr("Probar (Servidor Web)"), QMessageBox::ActionRole);
+                msgBox.addButton(QMessageBox::Ok);
+                
+                msgBox.exec();
+                
+                if (msgBox.clickedButton() == openBtn) {
+                     QDesktopServices::openUrl(QUrl::fromLocalFile(outputDir));
+                } else if (msgBox.clickedButton() == testBtn) {
+                     QProcess::startDetached("python3", QStringList() << "-m" << "http.server" << "8000" << "--directory" << outputDir);
+                     QDesktopServices::openUrl(QUrl("http://localhost:8000"));
+                }
+                accept();
+            } else {
+                QMessageBox::information(this, tr("Publicación Exitosa"), cleanMsg);
+                accept();
+            }
         } else {
             QMessageBox::critical(this, tr("Error de Publicación"), msg);
         }
     });
+    
+    checkAndroidTools();
 }
 
 void PublishDialog::onPublish()
@@ -339,17 +451,37 @@ void PublishDialog::onPublish()
     
     if (config.platform == Publisher::Linux) {
         config.generateAppImage = m_chkLinuxAppImage->isChecked();
+        config.generateLinuxStandalone = m_chkLinuxStandalone->isChecked();
+        config.generateLinuxArchive = m_chkLinuxArchive->isChecked();
         config.appImageToolPath = m_appImageToolPath;
     } else if (config.platform == Publisher::Windows) {
         config.generateStandalone = m_chkWindowsStandalone->isChecked();
         config.generateSfx = m_chkWindowsSfx->isChecked();
         config.generateZip = m_chkWindowsZip->isChecked();
+    } else if (config.platform == Publisher::Switch) {
+        config.switchAuthor = m_switchAuthorEdit->text();
+        if (config.switchAuthor.isEmpty()) config.switchAuthor = "BennuGD User";
+    } else if (config.platform == Publisher::Web) {
+        config.webTitle = m_webTitleEdit->text();
+        if (config.webTitle.isEmpty()) config.webTitle = "BennuGD Web Game";
+        
+        // Auto-detect EMSDK path for Publisher
+        QString emsdkP = qgetenv("EMSDK");
+        if (emsdkP.isEmpty()) {
+            QString home = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+            if (QDir(home + "/emsdk").exists()) emsdkP = home + "/emsdk";
+            else if (QDir("/opt/emsdk").exists()) emsdkP = "/opt/emsdk";
+        }
+        config.emsdkPath = emsdkP;
+        
     } else if (config.platform == Publisher::Android) {
         config.packageName = m_packageNameEdit->text();
         // config.iconPath set above
         config.fullProject = m_chkAndroidProject->isChecked();
 
         config.generateAPK = m_chkAndroidAPK->isChecked();
+        config.installOnDevice = m_chkInstallDevice->isChecked();
+        config.jdkPath = m_currentJdkPath;
         
         // Use environment variable for NDK if set
         QString envNdk = qgetenv("ANDROID_NDK_HOME");
@@ -521,4 +653,213 @@ QString PublishDialog::findToolPath(const QString &toolName)
     }
     
     return QString();
+}
+
+void PublishDialog::onInstallEmsdk()
+{
+    QString home = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    QString target = home + "/emsdk";
+    
+    if (QDir(target).exists()) {
+        QMessageBox::information(this, "Detectado", "EMSDK ya existe en " + target);
+        m_emsdkStatusLabel->setText("Instalado en " + target);
+        m_emsdkStatusLabel->setStyleSheet("color: green;");
+        m_installEmsdkBtn->setEnabled(false);
+        return;
+    }
+    
+    if (QMessageBox::question(this, "Instalar EMSDK", 
+        "¿Deseas descargar e instalar EMSDK en " + target + "?\n\n"
+        "Se clonará el repositorio oficial y se instalarán las herramientas 'latest'.\n"
+        "Esto requiere 'git' y 'python3' instalados y conexión a internet.\n"
+        "Puede tardar varios minutos.") != QMessageBox::Yes) return;
+        
+    QProgressDialog progress("Inicializando...", "Cancelar", 0, 0, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setValue(0);
+    progress.show();
+    
+    QProcess proc;
+    proc.setProcessChannelMode(QProcess::MergedChannels);
+    
+    // 1. Clone
+    progress.setLabelText("Clonando repositorio git (emsdk)...");
+    proc.setWorkingDirectory(home);
+    proc.start("git", QStringList() << "clone" << "https://github.com/emscripten-core/emsdk.git");
+    
+    while(!proc.waitForFinished(100)) {
+        QCoreApplication::processEvents();
+        if (progress.wasCanceled()) { proc.kill(); return; }
+    }
+    
+    if (proc.exitCode() != 0) {
+         QMessageBox::critical(this, "Error", "Fallo al clonar git:\n" + proc.readAllStandardOutput());
+         return;
+    }
+    
+    // 2. Install
+    progress.setLabelText("Descargando e instalando herramientas (Puede tardar 10-15 min)...");
+    proc.setWorkingDirectory(target);
+    proc.start("./emsdk", QStringList() << "install" << "latest");
+    
+    while(!proc.waitForFinished(100)) {
+        QCoreApplication::processEvents();
+        if (progress.wasCanceled()) { proc.kill(); return; }
+    }
+    
+    if (proc.exitCode() != 0) {
+         QMessageBox::critical(this, "Error", "Fallo al instalar tools:\n" + proc.readAllStandardOutput());
+         return;
+    }
+
+    // 3. Activate
+    progress.setLabelText("Activando versión latest...");
+    proc.start("./emsdk", QStringList() << "activate" << "latest");
+    proc.waitForFinished();
+    
+    m_emsdkStatusLabel->setText("Instalado en " + target);
+    m_emsdkStatusLabel->setStyleSheet("color: green;");
+    m_installEmsdkBtn->setEnabled(false);
+    
+    QMessageBox::information(this, "Éxito", "EMSDK instalado correctamente. Listo para compilar Web.");
+}
+
+void PublishDialog::checkAndroidTools()
+{
+    // Settings First
+    QSettings settings("BennuGD", "RayMapEditor");
+    QString savedJdk = settings.value("jdkPath").toString();
+    if (!savedJdk.isEmpty()) {
+        // Validation: No spaces allowed (Gradle fails with spaces)
+        if (savedJdk.contains(" ")) {
+             savedJdk.clear();
+             settings.remove("jdkPath");
+        } else if (QDir(savedJdk).exists() && (QFile::exists(savedJdk+"/bin/java") || QFile::exists(savedJdk+"/bin/java.exe"))) {
+            m_currentJdkPath = savedJdk;
+            m_jdkStatusLabel->setText("Configurado: " + savedJdk);
+            m_jdkStatusLabel->setStyleSheet("color: green;");
+            m_installJdkBtn->setVisible(false);
+            return;
+        } else {
+            settings.remove("jdkPath");
+        }
+    }
+    
+    // Scan common
+    QStringList candidates;
+    QString envJava = qgetenv("JAVA_HOME");
+    if (!envJava.isEmpty() && !envJava.contains(" ")) candidates << envJava;
+    
+    candidates << "/usr/lib/jvm/java-17-openjdk-amd64"
+               << "/usr/lib/jvm/default-java"
+               << QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/android-studio/jbr"
+               << "/opt/android-studio/jbr"
+               << "/snap/android-studio/current/jbr";
+               
+    for (const QString &p : candidates) {
+        if (!p.contains(" ") && QDir(p).exists() && (QFile::exists(p+"/bin/java") || QFile::exists(p+"/bin/java.exe"))) {
+            m_currentJdkPath = p;
+            m_jdkStatusLabel->setText("Detectado: " + p);
+            m_jdkStatusLabel->setStyleSheet("color: green;");
+            m_installJdkBtn->setVisible(false);
+            return;
+        }
+    }
+    
+    // Check our local tools folder specifically (Safe Path)
+    QString toolsDir = QDir::homePath() + "/.local/share/bennugd2/tools/jdk";
+    QDir tDir(toolsDir);
+    if (tDir.exists()) {
+        QStringList entries = tDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        if (!entries.isEmpty()) {
+             QString localJdk = toolsDir + "/" + entries.first();
+             if (QFile::exists(localJdk + "/bin/java") || QFile::exists(localJdk + "/bin/java.exe")) {
+                 m_currentJdkPath = localJdk;
+                 m_jdkStatusLabel->setText("Instalado Localmente");
+                 m_jdkStatusLabel->setStyleSheet("color: green;");
+                 m_installJdkBtn->setVisible(false);
+                 return;
+             }
+        }
+    }
+
+    m_currentJdkPath = "";
+    m_jdkStatusLabel->setText("No se encontró JDK 17.");
+    m_jdkStatusLabel->setStyleSheet("color: red; font-weight: bold;");
+    m_installJdkBtn->setVisible(true);
+}
+
+void PublishDialog::onInstallJDK()
+{
+    QString url;
+    QString ext = "tar.gz";
+    #ifdef Q_OS_LINUX
+    url = "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jdk/hotspot/normal/eclipse?project=jdk";
+    #elif defined(Q_OS_WIN)
+    url = "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse?project=jdk";
+    ext = "zip";
+    #elif defined(Q_OS_MACOS)
+    url = "https://api.adoptium.net/v3/binary/latest/17/ga/mac/x64/jdk/hotspot/normal/eclipse?project=jdk";
+    #endif
+    
+    if (url.isEmpty()) {
+        QMessageBox::critical(this, "Error", "Sistema operativo no soportado para descarga automática.");
+        return;
+    }
+    
+    QProgressDialog progress("Descargando JDK Portable...", "Cancelar", 0, 0, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.show();
+    
+    QString dlPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/jdk_installer." + ext;
+    // Use SAFE PATH (No spaces)
+    QString targetDir = QDir::homePath() + "/.local/share/bennugd2/tools/jdk";
+    
+    // Clean target first
+    if (QDir(targetDir).exists()) QDir(targetDir).removeRecursively();
+    QDir().mkpath(targetDir);
+    
+    QProcess dl;
+    progress.setLabelText("Descargando (aprox 200MB)...");
+    dl.start("curl", QStringList() << "-L" << "-o" << dlPath << url);
+    while(!dl.waitForFinished(100)) {
+        QCoreApplication::processEvents();
+        if (progress.wasCanceled()) { dl.kill(); return; }
+    }
+    
+    if (dl.exitCode() != 0) {
+        QMessageBox::critical(this, "Error", "Error descargando JDK:\n" + dl.readAllStandardError());
+        return;
+    }
+    
+    progress.setLabelText("Descomprimiendo...");
+    QProcess extract;
+    extract.setWorkingDirectory(targetDir);
+    if (ext == "zip") {
+        extract.start("unzip", QStringList() << "-o" << dlPath);
+    } else {
+        extract.start("tar", QStringList() << "-xzf" << dlPath);
+    }
+    
+    while(!extract.waitForFinished(100)) {
+        QCoreApplication::processEvents();
+    }
+    
+    if (extract.exitCode() != 0) {
+         QMessageBox::critical(this, "Error", "Error descomprimiendo:\n" + extract.readAllStandardError());
+         return;
+    }
+    
+    QDir tDir(targetDir);
+    QStringList entries = tDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    if (!entries.isEmpty()) {
+        QString finalPath = targetDir + "/" + entries.first();
+        QSettings settings("BennuGD", "RayMapEditor");
+        settings.setValue("jdkPath", finalPath);
+        checkAndroidTools(); 
+        QMessageBox::information(this, "Éxito", "JDK instalado en ruta segura:\n" + finalPath);
+    } else {
+        QMessageBox::critical(this, "Error", "No se encontró la carpeta descomprimida.");
+    }
 }

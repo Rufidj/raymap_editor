@@ -39,6 +39,7 @@ struct ProjectData {
     // Publishing
     QString packageName;  // For Android publishing
     QString iconPath;     // For publishing
+    bool androidSupport = true; // Generate Android compatibility code
 };
 
 class ProjectManager : public QObject

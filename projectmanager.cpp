@@ -149,6 +149,8 @@ ProjectData ProjectManager::loadProjectData(const QString &projectPath)
             data.fov = config.value("fov").toInt(data.fov);
             data.raycastQuality = config.value("raycastQuality").toInt(data.raycastQuality);
             data.fullscreen = config.value("fullscreen").toBool(data.fullscreen);
+            data.packageName = config.value("packageName").toString("com.example.game");
+            data.androidSupport = config.value("androidSupport").toBool(true);
             data.cameraX = config.value("cameraX").toDouble(data.cameraX);
             data.cameraY = config.value("cameraY").toDouble(data.cameraY);
             data.cameraZ = config.value("cameraZ").toDouble(data.cameraZ);

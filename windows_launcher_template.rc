@@ -1,0 +1,41 @@
+// Resource file for BennuGD2 Windows Launcher
+// This will be customized by the publisher
+
+#include <windows.h>
+
+// Embedded resources
+IDR_DCB_FILE  RCDATA "{{DCB_PATH}}"
+IDR_BGDI_EXE  RCDATA "{{BGDI_PATH}}"
+
+// Version information
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     {{VERSION_MAJOR}},{{VERSION_MINOR}},{{VERSION_PATCH}},0
+PRODUCTVERSION  {{VERSION_MAJOR}},{{VERSION_MINOR}},{{VERSION_PATCH}},0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName",      "{{COMPANY_NAME}}"
+            VALUE "FileDescription",  "{{GAME_NAME}}"
+            VALUE "FileVersion",      "{{VERSION_STRING}}"
+            VALUE "InternalName",     "{{INTERNAL_NAME}}"
+            VALUE "LegalCopyright",   "{{COPYRIGHT}}"
+            VALUE "OriginalFilename", "{{EXE_NAME}}"
+            VALUE "ProductName",      "{{GAME_NAME}}"
+            VALUE "ProductVersion",   "{{VERSION_STRING}}"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1252
+    END
+END
+
+// Icon (if provided)
+// IDI_ICON1 ICON "{{ICON_PATH}}"

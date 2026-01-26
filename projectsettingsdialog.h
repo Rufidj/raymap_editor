@@ -34,6 +34,7 @@ private:
     // UI Elements
     QLineEdit *m_nameEdit;
     QLineEdit *m_versionEdit;
+    QLineEdit *m_packageEdit; // Android Package Name
     
     QLineEdit *m_fpgEdit;
     QPushButton *m_browseFpgBtn;
@@ -49,6 +50,7 @@ private:
     QSpinBox *m_fovSpin;
     QSpinBox *m_qualitySpin; // New
     QCheckBox *m_fullscreenCheck; // New: Fullscreen mode
+    QCheckBox *m_androidSupportCheck; // New: Android compatibility
     
     QDoubleSpinBox *m_camX;
     QDoubleSpinBox *m_camY;

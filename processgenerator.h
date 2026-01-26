@@ -11,7 +11,9 @@ public:
     // Generate process code for an entity type
     static QString generateProcessCode(const QString &processName, 
                                       const QString &assetPath,
-                                      const QString &type);
+                                      const QString &type,
+                                      const QString &wrapperOpen = "",
+                                      const QString &wrapperClose = "");
     
     // Generate includes section for main.prg
     static QString generateIncludesSection(const QVector<EntityInstance> &entities);

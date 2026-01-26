@@ -64,6 +64,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_projectManager = new ProjectManager(this); // Initialize ProjectManager
     
     setWindowTitle("RayMap Editor - Geometric Sectors");
+    setWindowIcon(QIcon(":/icon.png"));
     resize(1280, 800);
     
     // Create grid editor
@@ -173,61 +174,70 @@ void MainWindow::createActions()
 
 void MainWindow::createMenus()
 {
-    // === PROJECT MENU ===
-    QMenu *projectMenu = menuBar()->addMenu(tr("&Proyecto"));
+    // === FILE MENU (Unified Project & Map) ===
+    QMenu *fileMenu = menuBar()->addMenu(tr("&Archivo"));
     
+    // -- Project Actions --
     QAction *newProjectAction = new QAction(tr("Nuevo Proyecto..."), this);
     connect(newProjectAction, &QAction::triggered, this, &MainWindow::onNewProject);
-    projectMenu->addAction(newProjectAction);
+    fileMenu->addAction(newProjectAction);
     
     QAction *openProjectAction = new QAction(tr("Abrir Proyecto..."), this);
     connect(openProjectAction, &QAction::triggered, this, &MainWindow::onOpenProject);
-    projectMenu->addAction(openProjectAction);
+    fileMenu->addAction(openProjectAction);
+    
+    m_recentProjectsMenu = fileMenu->addMenu(tr("Proyectos Recientes"));
+    updateRecentProjectsMenu();
     
     QAction *closeProjectAction = new QAction(tr("Cerrar Proyecto"), this);
     connect(closeProjectAction, &QAction::triggered, this, &MainWindow::onCloseProject);
-    projectMenu->addAction(closeProjectAction);
+    fileMenu->addAction(closeProjectAction);
     
-    projectMenu->addSeparator();
+    fileMenu->addSeparator();
     
-    QAction *projectSettingsAction = new QAction(tr("Configuración..."), this);
-    connect(projectSettingsAction, &QAction::triggered, this, &MainWindow::onProjectSettings);
-    projectMenu->addAction(projectSettingsAction);
+    // -- Map Actions --
+    // Rename actions to be specific since we now share the menu
+    m_newAction->setText(tr("Nuevo Mapa"));
+    m_openAction->setText(tr("Abrir Mapa..."));
+    m_saveAction->setText(tr("Guardar Mapa"));
+    m_saveAsAction->setText(tr("Guardar Mapa como..."));
     
-    projectMenu->addSeparator();
-    
-    QAction *publishAction = new QAction(tr("Publicar..."), this);
-    publishAction->setToolTip(tr("Publicar proyecto para distribución"));
-    connect(publishAction, &QAction::triggered, this, &MainWindow::onPublishProject);
-    projectMenu->addAction(publishAction);
-
-    // === FILE MENU ===
-    QMenu *fileMenu = menuBar()->addMenu(tr("&Archivo"));
     fileMenu->addAction(m_newAction);
     fileMenu->addAction(m_openAction);
     fileMenu->addAction(m_saveAction);
     fileMenu->addAction(m_saveAsAction);
+    
+    m_recentMapsMenu = fileMenu->addMenu(tr("Mapas Recientes"));
+    updateRecentMapsMenu();
+    
     fileMenu->addSeparator();
     
-    // Import WLD action
+    // -- Project Settings & Publish --
+    QAction *projectSettingsAction = new QAction(tr("Configuración del Proyecto..."), this);
+    connect(projectSettingsAction, &QAction::triggered, this, &MainWindow::onProjectSettings);
+    fileMenu->addAction(projectSettingsAction);
+    
+    QAction *publishAction = new QAction(tr("Publicar Proyecto..."), this);
+    publishAction->setToolTip(tr("Publicar proyecto para distribución"));
+    connect(publishAction, &QAction::triggered, this, &MainWindow::onPublishProject);
+    fileMenu->addAction(publishAction);
+    
+    fileMenu->addSeparator();
+    
+    // -- Imports & Others --
     QAction *importWLDAction = new QAction(tr("Importar WLD..."), this);
     importWLDAction->setToolTip(tr("Importar mapa desde formato WLD"));
     connect(importWLDAction, &QAction::triggered, this, &MainWindow::onImportWLD);
     fileMenu->addAction(importWLDAction);
     
-    fileMenu->addSeparator();
     fileMenu->addAction(m_loadFPGAction);
-    
-    // Recent files submenus
-    fileMenu->addSeparator();
-    m_recentMapsMenu = fileMenu->addMenu(tr("Mapas Recientes"));
     m_recentFPGsMenu = fileMenu->addMenu(tr("FPGs Recientes"));
-    updateRecentMapsMenu();
     updateRecentFPGsMenu();
     
     fileMenu->addSeparator();
     fileMenu->addAction(m_exitAction);
     
+    // === VIEW MENU ===
     QMenu *viewMenu = menuBar()->addMenu(tr("&Ver"));
     viewMenu->addAction(m_zoomInAction);
     viewMenu->addAction(m_zoomOutAction);
@@ -3585,4 +3595,40 @@ void MainWindow::openObjConverter()
 {
     ObjImportDialog dialog(this);
     dialog.exec();
+}
+
+void MainWindow::updateRecentProjectsMenu()
+{
+    m_recentProjectsMenu->clear();
+    
+    QSettings settings("BennuGD", "RayMapEditor");
+    QStringList files = settings.value("recentProjects").toStringList();
+    
+    int numRecentFiles = qMin(files.size(), 10);
+    
+    for (int i = 0; i < numRecentFiles; ++i) {
+        QString text = tr("&%1 %2").arg(i + 1).arg(QFileInfo(files[i]).fileName());
+        QAction *action = m_recentProjectsMenu->addAction(text);
+        action->setData(files[i]);
+        connect(action, &QAction::triggered, this, [this, action](){
+            openProject(action->data().toString());
+        });
+    }
+    
+    m_recentProjectsMenu->setEnabled(numRecentFiles > 0);
+}
+
+void MainWindow::addToRecentProjects(const QString &path)
+{
+    QSettings settings("BennuGD", "RayMapEditor");
+    QStringList files = settings.value("recentProjects").toStringList();
+    
+    files.removeAll(path);
+    files.prepend(path);
+    
+    while (files.size() > 10)
+        files.removeLast();
+        
+    settings.setValue("recentProjects", files);
+    updateRecentProjectsMenu();
 }

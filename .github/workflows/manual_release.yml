@@ -1,0 +1,219 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release Version (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build:
+    name: Build ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {
+              name: "Windows Latest",
+              os: windows-latest,
+              artifact: "RayMapEditor-Windows.zip",
+              cmake_extra_args: "-G \"Visual Studio 17 2022\" -A x64"
+            }
+          - {
+              name: "Ubuntu 22.04",
+              os: ubuntu-22.04,
+              artifact: "RayMapEditor-Linux.AppImage",
+              cmake_extra_args: ""
+            }
+          - {
+              name: "macOS Latest",
+              os: macos-latest,
+              artifact: "RayMapEditor-macOS.dmg",
+              cmake_extra_args: ""
+            }
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.8.0'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtmultimedia qtshadertools'
+        if: runner.os == 'Windows'
+
+      - name: Install Qt (Linux/Mac)
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.8.0'
+        if: runner.os != 'Windows'
+        
+      - name: Install Dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          vcpkg install zlib:x64-windows
+        
+      - name: Install Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # Remove broken Microsoft repos blocking apt update
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.sources || true
+          sudo apt-get update
+          sudo apt-get install -y libgl-dev libvulkan-dev libx11-xcb-dev libxkbcommon-x11-dev libwayland-dev libxrandr-dev libxcb-cursor0
+          # Ensure zlib is available if not static
+          sudo apt-get install -y zlib1g-dev
+
+      - name: Build
+        shell: bash
+        run: |
+          mkdir build
+          cd build
+          
+          TOOLCHAIN_ARG=""
+          if [ -n "$VCPKG_INSTALLATION_ROOT" ]; then
+             TOOLCHAIN_ARG="-DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          fi
+          
+          cmake .. ${{ matrix.config.cmake_extra_args }} $TOOLCHAIN_ARG -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release --parallel
+
+      # --- PACKAGING WINDOWS ---
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd build
+          cd Release
+          
+          # Bundle Qt and Compiler Runtime (MSVC DLLs)
+          windeployqt --release --compiler-runtime --no-translations raymap_editor.exe --dir deploy
+          
+          Copy-Item raymap_editor.exe -Destination deploy\
+          
+          # Find and copy zlib1.dll from vcpkg
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          $zlibPath = "$vcpkgRoot\installed\x64-windows\bin\zlib1.dll"
+          if (Test-Path $zlibPath) {
+              Write-Host "Found zlib1.dll at $zlibPath"
+              Copy-Item $zlibPath -Destination deploy\
+          } else {
+              Write-Warning "zlib1.dll not found in vcpkg installed path! Searching entire vcpkg..."
+              $zlibFound = Get-ChildItem -Path $vcpkgRoot -Filter zlib1.dll -Recurse | Select-Object -First 1
+              if ($zlibFound) {
+                  Copy-Item $zlibFound.FullName -Destination deploy\
+              }
+          }
+
+          # Copy Assets (Icons, Images, Runtimes.png)
+          # We need to copy everything from project root that might be needed
+          $projectRoot = "..\.."
+          
+          if (Test-Path "$projectRoot\assets") { 
+             Write-Host "Copying assets..."
+             Copy-Item -Recurse "$projectRoot\assets" deploy\ 
+          }
+          
+          # Copy loose images in root (like Runtimes.png)
+          Get-ChildItem -Path $projectRoot -Filter "*.png" | Copy-Item -Destination deploy\
+          Get-ChildItem -Path $projectRoot -Filter "*.jpg" | Copy-Item -Destination deploy\
+          
+          # Try to copy loader_stub if built or present
+          if (Test-Path loader_stub.exe) { Copy-Item loader_stub.exe deploy\ }
+          elseif (Test-Path "$projectRoot\loader_stub.exe") { Copy-Item "$projectRoot\loader_stub.exe" deploy\ }
+          
+          cd deploy
+          Compress-Archive -Path * -DestinationPath "$env:GITHUB_WORKSPACE\RayMapEditor-Windows.zip"
+
+      # --- PACKAGING LINUX ---
+      - name: Package Linux (AppImage)
+        if: runner.os == 'Linux'
+        run: |
+          # Download linuxdeploy tools
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+
+          # Prepare AppDir
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/lib
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          
+          cp build/raymap_editor AppDir/usr/bin/
+          
+          # Assets for Linux
+          if [ -d "assets" ]; then
+             cp -r assets AppDir/usr/bin/
+          fi
+          
+          # Create Desktop file
+          cat > AppDir/usr/share/applications/raymap_editor.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=RayMap Editor
+          Exec=raymap_editor
+          Icon=raymap_editor
+          Categories=Development;
+          EOF
+          
+          # Copy Icon
+          if [ -f "icon.png" ]; then
+             cp icon.png AppDir/usr/share/icons/hicolor/256x256/apps/raymap_editor.png
+          elif [ -f "assets/icon.png" ]; then
+             cp assets/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/raymap_editor.png
+          else
+             # Dummy icon to prevent failure
+             touch AppDir/usr/share/icons/hicolor/256x256/apps/raymap_editor.png
+          fi
+          
+          # Run linuxdeploy
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
+          
+          mv RayMap*.AppImage RayMapEditor-Linux.AppImage
+
+      # --- PACKAGING MACOS ---
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        run: |
+          cd build
+          macdeployqt raymap_editor.app -dmg
+          mv raymap_editor.dmg ../RayMapEditor-macOS.dmg
+
+      # --- UPLOAD ARTIFACTS ---
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.config.artifact }}
+          path: ${{ matrix.config.artifact }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        
+      - name: Display structure of downloaded files
+        run: ls -R
+        
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
+          files: |
+            RayMapEditor-Windows.zip/RayMapEditor-Windows.zip
+            RayMapEditor-Linux.AppImage/RayMapEditor-Linux.AppImage
+            RayMapEditor-macOS.dmg/RayMapEditor-macOS.dmg

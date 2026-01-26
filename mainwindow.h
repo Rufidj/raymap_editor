@@ -203,7 +203,7 @@ private:
     QDockWidget *m_codePreviewDock;
     
     // Code Editor Window
-    CodeEditorDialog *m_codeEditorDialog;
+    // CodeEditorDialog *m_codeEditorDialog; // Removed to allow multiple windows
     
     // Build System
     BuildManager *m_buildManager;

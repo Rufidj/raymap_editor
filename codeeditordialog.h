@@ -1,18 +1,21 @@
 #ifndef CODEEDITORDIALOG_H
 #define CODEEDITORDIALOG_H
 
-#include <QDialog>
+#include <QMainWindow>
 #include "codeeditor.h"
 
-class QPushButton;
+class QAction;
 class QLabel;
 
-class CodeEditorDialog : public QDialog
+class CodeEditorDialog : public QMainWindow
 {
     Q_OBJECT
 
 public:
     explicit CodeEditorDialog(QWidget *parent = nullptr);
+    
+    // Static helper to launch new instances
+    static void openEditor(QWidget *parent, const QString &fileName = QString());
     
     bool openFile(const QString &fileName);
     bool saveFile();
@@ -30,11 +33,16 @@ private slots:
 
 private:
     bool maybeSave();
+    void createActions();
+    void createToolBar();
+    void createStatusBar();
     
     CodeEditor *m_editor;
-    QPushButton *m_saveButton;
-    QPushButton *m_saveAsButton;
-    QPushButton *m_closeButton;
+    
+    QAction *m_saveAction;
+    QAction *m_saveAsAction;
+    QAction *m_closeAction; // Optional, usually X button is enough
+    
     QLabel *m_statusLabel;
 };
 

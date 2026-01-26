@@ -59,7 +59,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_consoleWidget(nullptr)
     , m_projectManager(nullptr)
     , m_assetBrowser(nullptr)
-    , m_codeEditorDialog(nullptr)
+    // , m_codeEditorDialog(nullptr) // Removed
 {
     m_projectManager = new ProjectManager(this); // Initialize ProjectManager
     
@@ -3549,17 +3549,9 @@ void MainWindow::openMapFile(const QString &filename)
 
 void MainWindow::onOpenCodeEditor(const QString &filePath)
 {
-    if (!m_codeEditorDialog) {
-        m_codeEditorDialog = new CodeEditorDialog(this);
-    }
-    
-    m_codeEditorDialog->show();
-    m_codeEditorDialog->raise();
-    m_codeEditorDialog->activateWindow();
-    
-    if (!filePath.isEmpty()) {
-        m_codeEditorDialog->openFile(filePath);
-    }
+    // Use static method to open a new independent editor window
+    // Pass 'this' as parent so they minimize with main window, but they are non-modal
+    CodeEditorDialog::openEditor(this, filePath);
 }
 
 void MainWindow::onCodePreviewOpenRequested(const QString &filePath)

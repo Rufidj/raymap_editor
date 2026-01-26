@@ -67,6 +67,33 @@ void GridEditor::newMap()
 void GridEditor::setTextures(const QMap<int, QPixmap> &textures)
 {
     m_textures = textures;
+    
+    // Sync map data textures so they are available when passing MapData to other widgets
+    if (m_mapData) {
+        QSet<int> existingIds;
+        // Update existing entries
+        for (TextureEntry &entry : m_mapData->textures) {
+            existingIds.insert(entry.id);
+            if (textures.contains(entry.id)) {
+                entry.pixmap = textures[entry.id];
+            }
+        }
+        
+        // Add missing textures from the map (e.g. if loaded from FPG directly)
+        QMapIterator<int, QPixmap> i(textures);
+        while (i.hasNext()) {
+            i.next();
+            if (!existingIds.contains(i.key())) {
+                TextureEntry newEntry;
+                newEntry.id = i.key();
+                newEntry.pixmap = i.value();
+                newEntry.filename = QString::number(i.key()); // Fallback filename
+                // Width/Height not stored in struct, stored in pixmap
+                m_mapData->textures.append(newEntry);
+            }
+        }
+    }
+    
     update();
 }
 

@@ -25,7 +25,7 @@
 #include "entitypropertypanel.h"
 
 class BuildManager;
-class ProjectManager;
+#include "projectmanager.h"
 class AssetBrowser;
 
 class MainWindow : public QMainWindow
@@ -160,8 +160,10 @@ private slots:
     // Recent files helpers
     void updateRecentMapsMenu();
     void updateRecentFPGsMenu();
+    void updateRecentProjectsMenu(); // NEW
     void addToRecentMaps(const QString &filename);
     void addToRecentFPGs(const QString &filename);
+    void addToRecentProjects(const QString &path); // NEW
     
     // Decal editing
     void onDecalPlaced(float x, float y);
@@ -319,7 +321,8 @@ private:
     // Recent files menus
     QMenu *m_recentMapsMenu;
     QMenu *m_recentFPGsMenu;
-    
+    QMenu *m_recentProjectsMenu; // NEW
+
     QAction *m_zoomInAction;
     QAction *m_zoomOutAction;
     QAction *m_zoomResetAction;
@@ -339,6 +342,8 @@ private:
     void updateSectorPanel();
     void updateWallPanel();
     void updateDecalPanel();
+    void regenerateEntityScripts(const ProjectData *data = nullptr);
+    void openProject(const QString &path);
 };
 
 #endif // MAINWINDOW_H

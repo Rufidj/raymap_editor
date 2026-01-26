@@ -8,6 +8,7 @@
 #include <QInputDialog>
 #include <QDebug>
 #include <QDir>
+#include <QSettings>
 #include "projectmanager.h"
 #include "codegenerator.h"
 #include "processgenerator.h"
@@ -53,15 +54,8 @@ void MainWindow::setupBuildSystem()
     // Check if BennuGD2 is installed
 
     if (!m_buildManager->isBennuGD2Installed()) {
-        QMessageBox::StandardButton reply = QMessageBox::question(this,
-            tr("BennuGD2 no encontrado"),
-            tr("BennuGD2 no está instalado en tu sistema.\n"
-               "¿Deseas descargarlo e instalarlo automáticamente?"),
-            QMessageBox::Yes | QMessageBox::No);
-        
-        if (reply == QMessageBox::Yes) {
-            onInstallBennuGD2();
-        }
+        // Automatically open installer. The installer will check for missing files and prompt the user.
+        onInstallBennuGD2();
     }
 }
 
@@ -151,6 +145,10 @@ void MainWindow::onInstallBennuGD2()
     connect(installer, &BennuGDInstaller::installationFinished,
             this, [this, installer](bool success) {
         if (success) {
+            // Clear any custom override to force detection of new runtimes
+            QSettings settings("BennuGD", "RayMapEditor");
+            settings.remove("bennugdPath");
+            
             // Re-detect BennuGD2
             m_buildManager->detectBennuGD2();
             QMessageBox::information(this, tr("Success"),

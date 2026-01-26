@@ -3,7 +3,12 @@
 #include "projectsettingsdialog.h"
 #include "publishdialog.h"
 #include "projectmanager.h"
+#include "publishdialog.h"
+#include "projectmanager.h"
 #include "assetbrowser.h"
+#include "codegenerator.h" // New
+#include "processgenerator.h" // New
+#include "grideditor.h" // New
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -58,9 +63,7 @@ void MainWindow::onOpenProject()
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
     );
     
-    if (dirPath.isEmpty()) {
-        return;
-    }
+    if (dirPath.isEmpty()) return;
     
     // Find .bgd2proj file in the selected directory
     QDir dir(dirPath);
@@ -86,50 +89,7 @@ void MainWindow::onOpenProject()
         }
     }
     
-    // Create ProjectManager if it doesn't exist
-    if (!m_projectManager) {
-        m_projectManager = new ProjectManager();
-    }
-    
-    // Close current project if any
-    if (m_projectManager->hasProject()) {
-        onCloseProject();
-    }
-    
-    // Open project
-    if (m_projectManager->openProject(fileName)) {
-        QMessageBox::information(this, "Proyecto Abierto",
-            QString("Proyecto '%1' abierto exitosamente.")
-            .arg(m_projectManager->getProject()->name));
-        
-        if (m_assetBrowser) {
-            m_assetBrowser->setProjectPath(m_projectManager->getProjectPath());
-        }
-
-        updateWindowTitle();
-        
-        // Auto-open maps from project's maps folder
-        QString mapsDir = m_projectManager->getProjectPath() + "/assets/maps";
-        QDir dir(mapsDir);
-        if (dir.exists()) {
-            QStringList filters;
-            filters << "*.raymap" << "*.rmap";
-            QFileInfoList mapFiles = dir.entryInfoList(filters, QDir::Files);
-            
-            for (const QFileInfo &mapFile : mapFiles) {
-                qDebug() << "Auto-opening map:" << mapFile.absoluteFilePath();
-                openMapFile(mapFile.absoluteFilePath());
-            }
-            
-            if (!mapFiles.isEmpty()) {
-                m_statusLabel->setText(tr("Proyecto cargado: %1 mapas abiertos")
-                                      .arg(mapFiles.size()));
-            }
-        }
-    } else {
-        QMessageBox::warning(this, "Error",
-            "No se pudo abrir el proyecto.");
-    }
+    openProject(fileName);
 }
 
 void MainWindow::onCloseProject()
@@ -197,7 +157,8 @@ void MainWindow::onProjectSettings()
         ProjectData updatedData = dialog.getProjectData();
         
         // The dialog already regenerated main.prg with new settings
-        // We could save the settings to a project config file here
+        // Regenerate entity scripts (to apply Android support if needed)
+        regenerateEntityScripts(&updatedData);
         
         QMessageBox::information(this, "Configuración Guardada",
             QString("Configuración del proyecto actualizada.\n"
@@ -231,4 +192,117 @@ void MainWindow::onPublishProject()
     // Open publish dialog
     PublishDialog dialog(&projectData, this);
     dialog.exec();
+}
+
+void MainWindow::regenerateEntityScripts(const ProjectData *customData)
+{
+    if (!m_projectManager || !m_projectManager->hasProject()) return;
+    
+    // Setup generator with current settings
+    CodeGenerator generator;
+    ProjectData data;
+    
+    if (customData) {
+        data = *customData;
+        // Ensure path is set (sometimes logic cleans it?)
+        if (data.path.isEmpty()) data.path = m_projectManager->getProjectPath();
+    } else {
+        data = m_projectManager->loadProjectData(m_projectManager->getProjectPath());
+    }
+    
+    generator.setProjectData(data);
+    
+    GridEditor* editor = getCurrentEditor();
+    if (!editor) return;
+    MapData* mapData = editor->mapData();
+    if (!mapData) return;
+    
+    // Create includes directory
+    QString includesDir = m_projectManager->getProjectPath() + "/src/includes";
+    QDir().mkpath(includesDir);
+    
+    // Set to track generated files
+    QSet<QString> generatedFiles;
+
+    for (const EntityInstance &ent : mapData->entities) {
+        if (ent.type == "model" && !ent.assetPath.isEmpty()) {
+            
+            // Determine .h filename (based on process name)
+            QString hFileName = ent.processName + ".h";
+            if (generatedFiles.contains(hFileName)) continue;
+            generatedFiles.insert(hFileName);
+            
+            // Need relative asset path for the generator
+            QDir projDir(m_projectManager->getProjectPath());
+            QString relativeAssetPath = projDir.relativeFilePath(ent.assetPath);
+            
+            // Use generator to create the content suitable for Android if configured
+            // Use ProcessGenerator which is the standard one, passing wrappers
+            QString code = ProcessGenerator::generateProcessCode(ent.processName, 
+                                                               relativeAssetPath, 
+                                                               ent.type,
+                                                               generator.getWrapperOpen(),
+                                                               generator.getWrapperClose());
+            
+            // Save file
+            QFile file(includesDir + "/" + hFileName);
+            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                file.write(code.toUtf8());
+                file.close();
+                qDebug() << "Regenerated entity script:" << hFileName;
+            } else {
+                qWarning() << "Failed to write entity script:" << hFileName;
+            }
+        }
+    }
+}
+
+void MainWindow::openProject(const QString &path)
+{
+    // Create ProjectManager if it doesn't exist
+    if (!m_projectManager) {
+        m_projectManager = new ProjectManager();
+    }
+    
+    // Close current project if any
+    if (m_projectManager->hasProject()) {
+        onCloseProject();
+    }
+    
+    // Open project
+    if (m_projectManager->openProject(path)) {
+        addToRecentProjects(path);
+        
+        QMessageBox::information(this, "Proyecto Abierto",
+            QString("Proyecto '%1' abierto exitosamente.")
+            .arg(m_projectManager->getProject()->name));
+        
+        if (m_assetBrowser) {
+            m_assetBrowser->setProjectPath(m_projectManager->getProjectPath());
+        }
+
+        updateWindowTitle();
+        
+        // Auto-open maps from project's maps folder
+        QString mapsDir = m_projectManager->getProjectPath() + "/assets/maps";
+        QDir dir(mapsDir);
+        if (dir.exists()) {
+            QStringList filters;
+            filters << "*.raymap" << "*.rmap";
+            QFileInfoList mapFiles = dir.entryInfoList(filters, QDir::Files);
+            
+            for (const QFileInfo &mapFile : mapFiles) {
+                qDebug() << "Auto-opening map:" << mapFile.absoluteFilePath();
+                openMapFile(mapFile.absoluteFilePath());
+            }
+            
+            if (!mapFiles.isEmpty()) {
+                m_statusLabel->setText(tr("Proyecto cargado: %1 mapas abiertos")
+                                      .arg(mapFiles.size()));
+            }
+        }
+    } else {
+        QMessageBox::warning(this, "Error",
+            "No se pudo abrir el proyecto: " + path);
+    }
 }

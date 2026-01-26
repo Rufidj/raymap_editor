@@ -7,6 +7,8 @@
 #include <QFileDialog>
 #include <QScrollArea>
 #include <QLineEdit>
+#include <QComboBox>
+#include <QDialogButtonBox>
 
 EffectGeneratorDialog::EffectGeneratorDialog(QWidget *parent)
     : QDialog(parent)

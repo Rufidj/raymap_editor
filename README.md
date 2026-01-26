@@ -1,245 +1,151 @@
-# RayMap Editor - Editor Visual de Mapas para libmod_ray
+# Editor RayMap
 
-Editor visual de mapas para el módulo de raycasting de BennuGD2.
+![RayMap Editor Screenshot](assets/icon.png)
 
-## 📸 Capturas de Pantalla
+**RayMap Editor** es un avanzado editor de mapas y niveles 3D diseñado para el motor BennuGD2 (específicamente `mod_ray`). Permite crear mapas basados en sectores geométricos, similar a los juegos clásicos del motor Build (Duke Nukem 3D, Blood), pero con herramientas y flujo de trabajo modernos.
 
-### Interfaz Principal
-![Interfaz Principal](screenshots/editor_main_interface_1766517212880.png)
-*Vista general del editor mostrando el grid, paleta de texturas y herramientas*
+---
 
-### Sistema de Puertas
-![Sistema de Puertas](screenshots/editor_doors_example_1766517231292.png)
-*Puertas verticales (azul) y horizontales (naranja) con indicadores visuales*
+## 🇪🇸 Características Principales
 
+### 1. Edición de Sectores Geométricos
+*   **Edición en Rejilla**: Dibuja sectores simplemente haciendo clic en una cuadrícula 2D.
+*   **Modos de Dibujo**:
+    *   **Dibujar Sector**: Creación libre de nuevas habitaciones.
+    *   **Rectángulo / Círculo**: Creación rápida de formas estándar.
+    *   **Editar Vértices**: Mueve esquinas y rediseña sectores existentes con precisión milimétrica.
+*   **Sistema de Portales**:
+    *   **Portales Automáticos**: El editor detecta y conecta automáticamente las habitaciones adyacentes.
+    *   **Portales Manuales**: Enlaza dos paredes cualquiera manualmente para crear espacios complejos o geometrías no euclidianas.
 
-### Spawn Flags
-![Spawn Flags](screenshots/editor_spawn_flags_1766517261045.png)
-*Colocación de puntos de spawn con numeración automática*
+### 2. Gestión de Texturas y Materiales
+*   **Soporte Completo de Texturas**: Asigna texturas distintas para **Suelo**, **Techo** y **Paredes** (Superior, Media, Inferior).
+*   **Generador de Atlas de Texturas**: Crea automáticamente atlas optimizados para el renderizado de modelos multi-texturizados.
+*   **Importador WLD**: Importa mapas antiguos desde el formato `.wld`.
 
-## 🎯 Características
+### 3. Vista Previa 3D (Modo Visual)
+*   Pulsa **F3** para alternar entre la Vista de Rejilla 2D y el Modo Vuelo 3D.
+*   Previsualización de iluminación y texturas en tiempo real.
+*   Navega por tu nivel exactamente como lo verá el jugador.
 
-### ✅ Edición de Mapas
-- **Editor visual de grids** con 3 niveles (0, 1, 2)
-- **Edición multi-nivel** de paredes, suelos y techos independientes
-- **Pintar con mouse** (click izquierdo = pintar, click derecho = borrar)
-- **Zoom** con rueda del mouse
-- **Paleta de texturas** con vista previa
+### 4. Generadores Avanzados
+*   **Generador de Modelos MD3**: Crea *props* y elementos 3D complejos directamente en el editor sin necesitar Blender o Maya.
+    *   **Rampas y Escaleras**: Genera escaleras transitables con número de escalones configurable.
+    *   **Arcos y Pilares**: Crea arquitectura curva fácilmente.
+    *   **Puentes**: Genera plataformas elevadas con barandillas opcionales.
+    *   **Casas**: Creación rápida de estructuras con varios tipos de techo (Plano, A dos aguas).
+*   **Conversor OBJ a MD3**: Importa modelos estándar `.obj` y conviértelos para usarlos en tu mapa.
+*   **Editor de Caminos de Cámara**: Define esplines y movimientos de cámara cinemáticos para escenas (cutscenes).
+*   **Generador de Efectos**: Crea sistemas de partículas y efectos visuales de forma gráfica.
 
-### 🚪 Sistema de Puertas
-- **Puertas verticales** (ID 1001-1500) con indicador 🚪V y borde azul
-- **Puertas horizontales** (ID 1501+) con indicador 🚪H y borde naranja
-- **Animación de apertura/cierre** en el motor
-- **Botones dedicados** con código de colores
+### 5. Gestión de Proyectos y Compilación
+*   **Sistema de Proyectos**: Organiza tus mapas, recursos y scripts en un formato de proyecto estructurado.
+*   **Integración con BennuGD2**:
+    *   **Compilador Integrado**: Pulsa **F5** para compilar tu mapa y scripts directamente.
+    *   **Ejecución Rápida**: Pulsa **F9** para probar el juego inmediatamente.
+    *   **Compilaciones Multiplataforma**: Detecta automáticamente tu runtime (Windows/Linux/macOS).
+    *   **Generación de Código**: Genera automáticamente el código `.prg` necesario para cargar tu mapa.
 
-### 🗺️ Sistema de Slopes (Rampas)
-- **Creación visual de rampas** arrastrando rectángulos
-- **Dos tipos de slopes**: West→East y North→South
-- **Slopes invertidos** para techos inclinados
-- **Configuración de alturas** inicial y final
-- **Visualización en tiempo real** con preview
+### 6. Explorador de Recursos (Asset Browser)
+*   Explorador de archivos integrado para gestionar tus texturas, sonidos y modelos.
+*   Arrastrar y Soltar recursos directamente en la escena.
+*   Previsualización de archivos FPG (librerías de sprites).
 
-### 📍 Spawn Flags
-- **Colocación de puntos de spawn** con click
-- **Numeración automática** de flags
-- **Visualización por nivel** con indicadores visuales
-- **Eliminación con click derecho**
+## Controles
 
-### 📦 Gestión de Archivos
-- **Carga de texturas FPG** de BennuGD2 (con soporte gzip)
-- **Formato .raymap versión 4** con soporte multi-nivel completo
-- **Retrocompatibilidad** con versiones anteriores
-- **Exportar a texto** (formato CSV)
-- **Barra de progreso** para operaciones largas
+| Tecla | Acción |
+| --- | --- |
+| **Clic Izquierdo** | Dibujar / Seleccionar / Mover |
+| **Clic Derecho** | Menú Contextual / Cancelar Dibujo |
+| **Clic Central / Espacio + Arrastrar** | Mover la Rejilla (Pan) |
+| **Rueda** | Zoom Acercar/Alejar |
+| **F3** | Alternar Modo Visual 3D |
+| **F5** | Compilar Proyecto |
+| **F9** | Ejecutar Proyecto |
+| **Ctrl+S** | Guardar Mapa |
+| **Ctrl+Z** | Deshacer |
 
-## 📖 Guía de Uso
+## Instalación
 
-### 1. Cargar texturas
+### Windows
+1. Descarga `RayMapEditor-Windows.zip`.
+2. Extráelo en una carpeta.
+3. Ejecuta `raymap_editor.exe`.
+4. *Opcional*: Si no tienes BennuGD2 instalado, usa el menú **Compilar -> Instalar BennuGD2...** para descargar los runtimes automáticamente.
 
-1. **Archivo → Cargar Texturas FPG...**
-2. Seleccionar el archivo `textures.fpg`
-3. Las texturas aparecerán en el panel derecho
+### Linux
+1. Descarga `RayMapEditor-Linux.AppImage`.
+2. Hazlo ejecutable: `chmod +x RayMapEditor-Linux.AppImage`.
+3. Ejecútalo.
 
-### 2. Crear un nuevo mapa
+### macOS
+1. Descarga `RayMapEditor-macOS.dmg`.
+2. Arrástralo a la carpeta Aplicaciones.
 
-1. **Archivo → Nuevo Mapa**
-2. Especificar dimensiones (ej: 32x32)
-3. Seleccionar textura de la paleta
-4. Pintar en el grid con el mouse
+---
 
-### 3. Editar niveles
+# 🇬🇧 RayMap Editor
 
-- Usar el selector **"Nivel"** (0, 1, 2) en la barra de herramientas
-- Cada nivel tiene sus propios grids de paredes, suelo y techo
+**RayMap Editor** is a sophisticated 3D map and level editor designed for BennuGD2 engines (specifically `mod_ray`). It allows creating geometric sector-based maps, similar to classic Build Engine games (Duke Nukem 3D, Blood), but with modern tools and workflow.
 
-### 4. Modos de edición
+## Features
 
-- **Paredes**: Editar paredes del mapa
-- **Suelo**: Editar texturas del suelo
-- **Techo**: Editar texturas del techo
-- **Slopes**: Crear rampas e inclinaciones
-- **Spawn Flags**: Colocar puntos de spawn
+### 1. Geometric Sector Editing
+*   **Grid-Based Editing**: Draw sectors simply by clicking on a 2D grid.
+*   **Draw Modes**:
+    *   **Draw Sector**: Free-form drawing of new rooms.
+    *   **Rectangle / Circle**: Quick creation of standard shapes.
+    *   **Edit Vertices**: Move corners and reshape existing sectors perfectly.
+*   **Portal System**:
+    *   **Automatic Portals**: The editor automatically detects connections between adjacent sectors.
+    *   **Manual Portals**: Link any two walls manually for complex non-euclidean spaces or manual fixes.
 
-### 5. Añadir puertas
+### 2. Texture & Material Management
+*   **Full Texture Support**: Assign distinct textures to **Floors**, **Ceilings**, and **Walls** (Upper, Middle, Lower).
+*   **Texture Atlas Generator**: Automatically creates atlases for optimized rendering when using multi-textured models.
+*   **WLD Importer**: Import legacy maps from `.wld` format.
 
-#### Puertas Verticales (🚪V)
-1. Click en **🚪 Puerta V** (botón azul)
-2. El ID se ajusta automáticamente al rango 1001-1500
-3. Pintar en el mapa como una pared normal
-4. Aparecen con borde azul y etiqueta 🚪V
+### 3. Integrated 3D Preview (Visual Mode)
+*   Press **F3** to toggle between 2D Grid View and 3D Fly Mode.
+*   Real-time lighting and texture preview.
+*   Navigate your level exactly as the player will see it.
 
-#### Puertas Horizontales (🚪H)
-1. Click en **🚪 Puerta H** (botón naranja)
-2. El ID se ajusta automáticamente al rango 1501+
-3. Pintar en el mapa
-4. Aparecen con borde naranja y etiqueta 🚪H
+### 4. Advanced Generators
+*   **MD3 Model Generator**: Create complex 3D props directly within the editor without needing Blender/Maya.
+    *   **Ramps & Stairs**: Generate walkable staircases with configurable steps.
+    *   **Arches & Pillars**: Create curved architecture.
+    *   **Bridges**: Generate platforms with optional railings and arches.
+    *   **Houses**: Quick building generation with various roof types (Flat, Gabled).
+*   **OBJ to MD3 Converter**: Import standard `.obj` models and convert them for use in your map.
+*   **Camera Path Editor**: Define cinematic splines and camera movements for cutscenes.
+*   **Effect Generator**: Create particle systems and visual effects visually.
 
-### 6. Crear Slopes (Rampas)
+### 5. Project Management & Compilation
+*   **Project System**: Organize your maps, assets, and scripts in a structured project format.
+*   **BennuGD2 Integration**:
+    *   **Built-in Compiler**: Press **F5** to compile your map and scripts directly.
+    *   **One-Click Run**: Press **F9** to playtest immediately.
+    *   **Cross-Platform Builds**: Detects your runtime automatically (Windows/Linux/macOS).
+    *   **Code Generation**: Automatically generates the `.prg` code needed to load your map.
 
-1. Seleccionar modo **Slopes**
-2. Configurar:
-   - **Tipo**: West→East o North→South
-   - **Altura inicial** y **Altura final**
-   - **Invertido**: Para techos inclinados
-3. Click y arrastrar para crear el rectángulo de la rampa
-4. Soltar para crear el slope
+### 6. Asset Browser
+*   Built-in file explorer to manage your textures, sounds, and models.
+*   Drag & Drop assets into the scene.
+*   Preview FPG files (sprite libraries).
 
-### 7. Colocar Spawn Flags
+## Compilation from Source
 
-1. Seleccionar modo **Spawn Flags**
-2. Click izquierdo para colocar una flag
-3. Click derecho para eliminar una flag
-4. Las flags se numeran automáticamente
+**Requirements:**
+*   Qt 6.8.0 (Widgets, OpenGL, Network, Shadertools)
+*   CMake 3.16+
+*   C++17 Compiler
 
-### 8. Controles del mouse
-
-- **Click izquierdo + arrastrar**: Pintar textura seleccionada
-- **Click derecho + arrastrar**: Borrar (poner a 0)
-- **Rueda del mouse**: Zoom in/out
-
-### 9. Guardar el mapa
-
-1. **Archivo → Guardar Como...**
-2. Guardar como archivo `.raymap`
-
-## 🎮 Integración con BennuGD2
-
-```bennugd
-import "mod_ray";
-
-process main()
-begin
-    fpg_textures = load_fpg("textures.fpg");
-    RAY_INIT(800, 600, 90, 2);
-    RAY_LOAD_MAP("mi_mapa.raymap", fpg_textures);
-    
-    // Usar posición de cámara del mapa
-    if (RAY_HAS_MAP_CAMERA())
-        RAY_SET_CAMERA_FROM_MAP();
-    end
-    
-    while (!key(_ESC))
-        // Movimiento
-        if (key(_W)) RAY_MOVE_FORWARD(5.0); end
-        if (key(_S)) RAY_MOVE_BACKWARD(5.0); end
-        if (key(_A)) RAY_STRAFE_LEFT(5.0); end
-        if (key(_D)) RAY_STRAFE_RIGHT(5.0); end
-        
-        // Rotación con mouse
-        RAY_MOUSE_LOOK(0.002);
-        
-        // Interacción con puertas
-        if (key(_E))
-            RAY_TOGGLE_DOOR();
-        end
-        
-        // Cambiar de nivel
-        if (key(_1)) RAY_SET_LEVEL(0); end
-        if (key(_2)) RAY_SET_LEVEL(1); end
-        if (key(_3)) RAY_SET_LEVEL(2); end
-        
-        RAY_RENDER();
-        frame;
-    end
-    
-    RAY_SHUTDOWN();
-end
+**Build Steps:**
+```bash
+mkdir build && cd build
+cmake ..
+make -j4
 ```
 
-## ⌨️ Atajos de Teclado
-
-### Archivo
-- **Ctrl+N**: Nuevo mapa
-- **Ctrl+O**: Abrir mapa
-- **Ctrl+S**: Guardar
-- **Ctrl+Shift+S**: Guardar como
-- **Ctrl+E**: Exportar a texto
-- **Ctrl+Q**: Salir
-
-### Vista
-- **Ctrl++**: Acercar zoom
-- **Ctrl+-**: Alejar zoom
-- **Ctrl+0**: Resetear zoom
-
-### Edición
-- **1**: Modo Paredes
-- **2**: Modo Suelo
-- **3**: Modo Techo
-- **4**: Modo Slopes
-- **5**: Modo Spawn Flags
-
-## 📄 Formato de Archivo
-
-### .raymap Versión 4
-
-El formato actual incluye:
-
-- **3 niveles completos** (0, 1, 2)
-- **Grids independientes** por nivel:
-  - Paredes (walls)
-  - Suelo (floor)
-  - Techo (ceiling)
-  - Altura de suelo (floor height)
-- **ThickWalls** (slopes/rampas)
-- **ThinWalls** (paredes de slopes)
-- **Spawn Flags** con nivel asociado
-- **Posición de cámara**
-
-### Retrocompatibilidad
-
-El editor puede abrir mapas de versiones anteriores (1, 2 y 3) y los convierte automáticamente a versión 4 al guardar.
-
-## 🔧 Consejos y Trucos
-
-### Crear edificios de varios pisos
-
-1. Diseña el nivel 0 (planta baja)
-2. Cambia al nivel 1 y diseña el primer piso
-3. Usa slopes para crear escaleras entre niveles
-4. Coloca spawn flags en cada nivel para puntos de entrada
-
-### Puertas automáticas
-
-Las puertas se crean automáticamente al pintar con IDs especiales:
-- **1001-1500**: Puertas que se deslizan verticalmente
-- **1501+**: Puertas que se deslizan horizontalmente
-
-El motor detecta automáticamente el tipo y anima la apertura/cierre.
-
-### Rampas realistas
-
-Para crear rampas que se vean bien:
-1. Usa altura inicial 0.0 y final 128.0 para una rampa completa
-2. Para medias rampas, usa 0.0 a 64.0
-3. Invierte el slope para crear techos inclinados
-
-### Organización de texturas
-
-Organiza tus texturas en el FPG:
-- **1-999**: Paredes normales
-- **1001-1500**: Texturas para puertas verticales
-- **1501+**: Texturas para puertas horizontales
-
-## 📜 Licencia
-
-Este editor es parte del proyecto BennuGD2 y se distribuye bajo la misma licencia.
+---
+*Created by [Rufidj](https://github.com/Rufidj) for the BennuGD2 Community.*

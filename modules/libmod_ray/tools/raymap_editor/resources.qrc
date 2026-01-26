@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="images/installer_banner.png">Runtimes.png</file>
+        <file alias="icon.png">assets/icon.png</file>
+    </qresource>
+</RCC>

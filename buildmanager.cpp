@@ -133,7 +133,6 @@ void BuildManager::buildProject(const QString &projectPath)
     emit executeInTerminal("Compiling: " + mainFile + "\n");
     
     // Set environment vars
-    QProcessEnvironment env;
     QFileInfo bgdcInfo(m_bgdcPath);
     QString bgdcDir = bgdcInfo.absolutePath();
     
@@ -146,15 +145,15 @@ void BuildManager::buildProject(const QString &projectPath)
     #endif
     
     QString script = bgdcDir + "/compile" + scriptExtension;
-    QString srcDir = projectPath + "/src";
-    QString mainFile = "main.prg";
+    QString srcDir = QDir::toNativeSeparators(projectPath + "/src");
+    // mainFile is already defined above
     
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     
     // Clean environment logic (Linux/Mac) or Path extension (Windows)
     #ifdef Q_OS_WIN
         QString currentPath = env.value("PATH");
-        env.insert("PATH", bgdcDir + ";" + currentPath);
+        env.insert("PATH", QDir::toNativeSeparators(bgdcDir) + ";" + currentPath);
     #else
         env.insert("PATH", "/usr/bin:/bin:/usr/local/bin");
         env.insert("HOME", QDir::homePath());
@@ -164,6 +163,7 @@ void BuildManager::buildProject(const QString &projectPath)
     
     if (QFile::exists(script)) {
         // Wrapper exists (Old bundled style or manually added)
+        script = QDir::toNativeSeparators(script);
         emit executeInTerminal("Wrapper: " + script + " " + srcDir + "\n");
         m_process->start(script, QStringList() << srcDir);
     } else {
@@ -186,9 +186,10 @@ void BuildManager::buildProject(const QString &projectPath)
         m_process->setProcessEnvironment(env); // Re-set env with lib path
         #endif
 
-        emit executeInTerminal("Compiling (Direct): " + m_bgdcPath + " " + mainFile + "\n");
+        QString exe = QDir::toNativeSeparators(m_bgdcPath);
+        emit executeInTerminal("Compiling (Direct): " + exe + " " + mainFile + "\n");
         m_process->setWorkingDirectory(srcDir);
-        m_process->start(m_bgdcPath, QStringList() << "main.prg");
+        m_process->start(exe, QStringList() << "main.prg");
     }
     
     m_isrunning = true;
@@ -208,6 +209,10 @@ void BuildManager::runProject(const QString &projectPath)
     emit runStarted();
     emit executeInTerminal("Running: " + dcbFile + "\n");
     
+    // Set environment vars to help bgdi find modules (in same dir as executable)
+    QFileInfo bgdiInfo(m_bgdiPath);
+    QString bgdiDir = bgdiInfo.absolutePath();
+
     // Generic Wrapper Logic for ALL platforms
     QString scriptExtension = "";
     #ifdef Q_OS_WIN
@@ -217,14 +222,14 @@ void BuildManager::runProject(const QString &projectPath)
     #endif
     
     QString script = bgdiDir + "/run" + scriptExtension;
-    QString rootDir = projectPath;
+    QString rootDir = QDir::toNativeSeparators(projectPath);
     
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     
     // Clean environment logic (Linux/Mac) or Path extension (Windows)
     #ifdef Q_OS_WIN
         QString currentPath = env.value("PATH");
-        env.insert("PATH", bgdiDir + ";" + currentPath);
+        env.insert("PATH", QDir::toNativeSeparators(bgdiDir) + ";" + currentPath);
     #else
         env.insert("PATH", "/usr/bin:/bin:/usr/local/bin");
         env.insert("HOME", QDir::homePath());
@@ -240,10 +245,13 @@ void BuildManager::runProject(const QString &projectPath)
     #endif
     
     m_process->setProcessEnvironment(env);
+    
+    // Important: setWorkingDirectory requires native separators on some Windows configs if rootDir comes from URI
     m_process->setWorkingDirectory(rootDir);
 
     if (QFile::exists(script)) {
         // Wrapper exists
+        script = QDir::toNativeSeparators(script);
         emit executeInTerminal("Wrapper: " + script + " " + rootDir + "\n");
         #ifdef Q_OS_WIN
         m_process->start(script, QStringList() << rootDir); 
@@ -271,8 +279,9 @@ void BuildManager::runProject(const QString &projectPath)
         m_process->setProcessEnvironment(env); // Re-set env with lib path
         #endif
         
-        emit executeInTerminal("Running (Direct): " + m_bgdiPath + " src/main.dcb\n");
-        m_process->start(m_bgdiPath, QStringList() << "src/main.dcb");
+        QString exe = QDir::toNativeSeparators(m_bgdiPath);
+        emit executeInTerminal("Running (Direct): " + exe + " src/main.dcb\n");
+        m_process->start(exe, QStringList() << "src/main.dcb");
     }
     
     m_isrunning = true;

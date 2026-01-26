@@ -118,16 +118,21 @@ bool CodeEditorDialog::openFile(const QString &fileName)
 
 bool CodeEditorDialog::saveFile()
 {
+    qDebug() << "saveFile called for path:" << m_editor->currentFile();
+
     if (m_editor->currentFile().isEmpty()) {
+        qDebug() << "Path is empty, redirecting to Save As...";
         return saveFileAs();
     }
     
     if (!m_editor->saveFile()) {
+        qDebug() << "m_editor->saveFile() returned false!";
         QMessageBox::warning(this, "Error",
             QString("No se pudo guardar el archivo:\n%1\nVerifique permisos o si el archivo está en uso.").arg(m_editor->currentFile()));
         return false;
     }
     
+    qDebug() << "File saved successfully.";
     m_statusLabel->setText(QString("Guardado: %1").arg(m_editor->currentFile()));
     setWindowTitle(QFileInfo(m_editor->currentFile()).fileName() + " - Editor de Código"); // Reset title (remove *)
     return true;
@@ -170,11 +175,13 @@ void CodeEditorDialog::closeEvent(QCloseEvent *event)
 
 void CodeEditorDialog::onSave()
 {
+    qDebug() << "onSave triggered";
     saveFile();
 }
 
 void CodeEditorDialog::onSaveAs()
 {
+    qDebug() << "onSaveAs triggered";
     saveFileAs();
 }
 

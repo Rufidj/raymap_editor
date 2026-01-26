@@ -1984,12 +1984,23 @@ void MainWindow::onDeletePortal(int sectorIndex, int wallIndex)
 
 void MainWindow::updateWindowTitle()
 {
-    QString title = "RayMap Editor - Geometric Sectors";
-    GridEditor *editor = getCurrentEditor();
-    if (editor && !editor->fileName().isEmpty()) {
-        title += " - " + QFileInfo(editor->fileName()).fileName();
+    QString baseTitle = "RayMap Editor";
+    QString projectInfo;
+    
+    if (m_projectManager && m_projectManager->hasProject()) {
+        const Project* proj = m_projectManager->getProject();
+        if (proj) {
+            projectInfo = QString(" -- %1 (%2)").arg(proj->name).arg(proj->path);
+        }
+    } else {
+        // Fallback for standalone map editing
+        GridEditor *editor = getCurrentEditor();
+        if (editor && !editor->fileName().isEmpty()) {
+            projectInfo = QString(" -- %1").arg(QFileInfo(editor->fileName()).fileName());
+        }
     }
-    setWindowTitle(title);
+    
+    setWindowTitle(baseTitle + projectInfo);
 }
 
 void MainWindow::updateSectorPanel()

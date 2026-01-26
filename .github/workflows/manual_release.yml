@@ -1,4 +1,4 @@
-name: Manual Release
+name: RayMap Editor Release
 
 on:
   workflow_dispatch:
@@ -46,7 +46,6 @@ jobs:
           version: '6.8.0'
           host: 'windows'
           target: 'desktop'
-          arch: 'win64_msvc2022_64'
           arch: 'win64_msvc2022_64'
         if: runner.os == 'Windows'
 

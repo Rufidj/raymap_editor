@@ -29,7 +29,9 @@ public:
     bool loadObj(const QString &filename);
     bool loadGlb(const QString &filename); // GLB Support
     bool loadMtl(const QString &filename);
-    bool saveMd3(const QString &filename, float scale = 1.0f);
+    bool saveMd3(const QString &filename, float scale = 1.0f, float rotationDegrees = 0.0f, 
+                 float orientXDeg = 0.0f, float orientYDeg = 0.0f, float orientZDeg = 0.0f,
+                 float cameraXRot = 0.0f, float cameraYRot = 0.0f);
     
     // Texture handling
     bool generateTextureAtlas(const QString &outputPath, int size = 512);
@@ -40,6 +42,12 @@ public:
     bool mergeTextures(const QString &atlasPath, int atlasSize = 2048);
     int triangleCount() const { return m_triangles.size(); }
     int vertexCount() const { return m_finalVertices.size(); }
+    
+    // Getters for preview
+    const QVector<QVector3D>& vertices() const { return m_finalVertices; }
+    const QVector<QVector2D>& texCoords() const { return m_finalTexCoords; }
+    const QVector<Md3Triangle>& triangles() const { return m_triangles; }
+    const QMap<QString, ObjMaterial>& materials() const { return m_materials; }
     
     // Python Integration (Deprecated)
     static bool convertViaPython(const QString &input, const QString &output, double scale, QString &outputLog);

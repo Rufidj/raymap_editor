@@ -9,6 +9,7 @@
 #include <qmath.h>
 #include <QProcess>
 #include <QCoreApplication>
+#include <QMatrix4x4>
 
 #include <QRegularExpression>
 #include <QJsonDocument>
@@ -461,7 +462,9 @@ bool ObjToMd3Converter::loadGlb(const QString &filename)
     return true;
 }
 
-bool ObjToMd3Converter::saveMd3(const QString &filename, float scale)
+bool ObjToMd3Converter::saveMd3(const QString &filename, float scale, float rotationDegrees,
+                                 float orientXDeg, float orientYDeg, float orientZDeg,
+                                 float cameraXRot, float cameraYRot)
 {
     QFile file(filename);
     if (!file.open(QIODevice::WriteOnly)) return false;
@@ -469,6 +472,23 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale)
     QDataStream out(&file);
     out.setByteOrder(QDataStream::LittleEndian);
     out.setFloatingPointPrecision(QDataStream::SinglePrecision);
+    
+    // Apply transformations to the model
+    // NOTE: We do NOT apply camera rotations - those are just for preview visualization
+    QMatrix4x4 transform;
+    
+    // 1. Apply model orientation corrections (for fixing vertical models, etc.)
+    transform.rotate(orientXDeg, 1.0f, 0.0f, 0.0f);  // Model orientation X
+    transform.rotate(orientYDeg, 0.0f, 1.0f, 0.0f);  // Model orientation Y  
+    transform.rotate(orientZDeg, 0.0f, 0.0f, 1.0f);  // Model orientation Z
+    
+    // 2. Apply game rotation (Z axis) - this controls which direction the model faces
+    transform.rotate(rotationDegrees, 0.0f, 0.0f, 1.0f);  // Game rotation
+    
+    QVector<QVector3D> transformedVertices;
+    for (const QVector3D &v : m_finalVertices) {
+        transformedVertices.append(transform.map(v));
+    }
     
     // Header
     out.writeRawData("IDP3", 4);
@@ -499,7 +519,7 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale)
     float minX = 99999, minY = 99999, minZ = 99999;
     float maxX = -99999, maxY = -99999, maxZ = -99999;
     
-    for (const QVector3D &v : m_finalVertices) {
+    for (const QVector3D &v : transformedVertices) {
         float x = v.x() * scale;
         float y = v.y() * scale;
         float z = v.z() * scale;
@@ -528,14 +548,14 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale)
     out << (int)0; // Flags
     out << (int)1; // Num frames
     out << (int)0; // Num shaders
-    out << (int)m_finalVertices.size(); // Num verts
+    out << (int)transformedVertices.size(); // Num verts
     out << (int)m_triangles.size(); // Num triangles
     
     int ofs_tris = 108;
     int ofs_shaders = ofs_tris + (12 * m_triangles.size()); // 3 ints per tri (12 bytes)
     int ofs_st = ofs_shaders; // No shaders
-    int ofs_verts = ofs_st + (8 * m_finalVertices.size()); // 2 floats per UV (8 bytes)
-    int ofs_end = ofs_verts + (8 * m_finalVertices.size()); // 4 shorts per vert (8 bytes)
+    int ofs_verts = ofs_st + (8 * transformedVertices.size()); // 2 floats per UV (8 bytes)
+    int ofs_end = ofs_verts + (8 * transformedVertices.size()); // 4 shorts per vert (8 bytes)
     
     out << ofs_tris << ofs_shaders << ofs_st << ofs_verts << ofs_end;
     
@@ -552,7 +572,7 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale)
     }
     
     // Vertices (XYZ + Normal)
-    for (const QVector3D &v : m_finalVertices) {
+    for (const QVector3D &v : transformedVertices) {
         short x = qBound((short)-32768, (short)(v.x() * scale * 64.0f), (short)32767);
         short y = qBound((short)-32768, (short)(v.y() * scale * 64.0f), (short)32767);
         short z = qBound((short)-32768, (short)(v.z() * scale * 64.0f), (short)32767);

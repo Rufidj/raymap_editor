@@ -60,8 +60,8 @@ bool RayMapFormat::loadMap(const QString &filename, MapData &mapData,
     }
     
     /* Verify version */
-    if (version < 8 || version > 9) {
-        qWarning() << "Versión no soportada:" << version << "(solo v8-v9)";
+    if (version < 8 || version > 11) {
+        qWarning() << "Versión no soportada:" << version << "(solo v8-v11)";
         file.close();
         return false;
     }
@@ -232,6 +232,58 @@ bool RayMapFormat::loadMap(const QString &filename, MapData &mapData,
             in.readRawData(typeBytes.data(), typeLen);
             entity.type = QString::fromUtf8(typeBytes);
             
+            // Version 10 fields (Behaviors)
+            if (version >= 10) {
+                int32_t actType;
+                in.readRawData(reinterpret_cast<char*>(&actType), sizeof(int32_t));
+                entity.activationType = static_cast<EntityInstance::ActivationType>(actType);
+                
+                int32_t visible;
+                in.readRawData(reinterpret_cast<char*>(&visible), sizeof(int32_t));
+                entity.isVisible = (visible != 0);
+                
+                uint32_t collLen;
+                in.readRawData(reinterpret_cast<char*>(&collLen), sizeof(uint32_t));
+                QByteArray collBytes;
+                collBytes.resize(collLen);
+                in.readRawData(collBytes.data(), collLen);
+                entity.collisionTarget = QString::fromUtf8(collBytes);
+                
+                uint32_t actionLen;
+                in.readRawData(reinterpret_cast<char*>(&actionLen), sizeof(uint32_t));
+                QByteArray actionBytes;
+                actionBytes.resize(actionLen);
+                in.readRawData(actionBytes.data(), actionLen);
+                entity.customAction = QString::fromUtf8(actionBytes);
+                
+                uint32_t eventLen;
+                in.readRawData(reinterpret_cast<char*>(&eventLen), sizeof(uint32_t));
+                QByteArray eventBytes;
+                eventBytes.resize(eventLen);
+                in.readRawData(eventBytes.data(), eventLen);
+                entity.eventName = QString::fromUtf8(eventBytes);
+            }
+            
+            // Version 11 fields (Player & Controls)
+            if (version >= 11) {
+                int32_t isPlayer;
+                in.readRawData(reinterpret_cast<char*>(&isPlayer), sizeof(int32_t));
+                entity.isPlayer = (isPlayer != 0);
+                
+                int32_t ctrlType;
+                in.readRawData(reinterpret_cast<char*>(&ctrlType), sizeof(int32_t));
+                entity.controlType = static_cast<EntityInstance::ControlType>(ctrlType);
+                
+                int32_t camFollow;
+                in.readRawData(reinterpret_cast<char*>(&camFollow), sizeof(int32_t));
+                entity.cameraFollow = (camFollow != 0);
+                
+                in.readRawData(reinterpret_cast<char*>(&entity.cameraOffset_x), sizeof(float));
+                in.readRawData(reinterpret_cast<char*>(&entity.cameraOffset_y), sizeof(float));
+                in.readRawData(reinterpret_cast<char*>(&entity.cameraOffset_z), sizeof(float));
+                in.readRawData(reinterpret_cast<char*>(&entity.cameraRotation), sizeof(float));
+            }
+            
             // Generate processName from asset path if not set
             // (for backward compatibility with old maps)
             QFileInfo assetInfo(entity.assetPath);
@@ -283,7 +335,7 @@ bool RayMapFormat::saveMap(const QString &filename, const MapData &mapData,
     }
     // --------------------------------------------
     
-    uint32_t version = 9;  // Updated to v9 for nested sectors
+    uint32_t version = 11;  // Updated to v11 for player/control behavior
     uint32_t num_sectors = mapData.sectors.size();
     uint32_t num_portals = mapData.portals.size();
     uint32_t num_sprites = mapData.sprites.size();
@@ -314,8 +366,17 @@ bool RayMapFormat::saveMap(const QString &filename, const MapData &mapData,
     
     if (progressCallback) progressCallback("Guardando sectores...");
     
+    /* Create Sector ID Map (Editor ID -> Sequential Export ID) */
+    QMap<int, int> sectorIdMap;
+    for (int i = 0; i < mapData.sectors.size(); i++) {
+        sectorIdMap[mapData.sectors[i].sector_id] = i;
+    }
+
     /* Write sectors */
     for (const Sector &sector : mapData.sectors) {
+        // Write ID (we write the sequential one to match engine expectation, or original? 
+        // Engine v9 loads sectors into array index. It doesn't use the stored ID for indexing usually, but assumes order.
+        // Let's write the original ID just in case, but hierarchy must use INDEX.)
         out.writeRawData(reinterpret_cast<const char*>(&sector.sector_id), sizeof(int));
         out.writeRawData(reinterpret_cast<const char*>(&sector.floor_z), sizeof(float));
         out.writeRawData(reinterpret_cast<const char*>(&sector.ceiling_z), sizeof(float));
@@ -350,23 +411,36 @@ bool RayMapFormat::saveMap(const QString &filename, const MapData &mapData,
             out.writeRawData(reinterpret_cast<const char*>(&wall.texture_split_z_lower), sizeof(float));
             out.writeRawData(reinterpret_cast<const char*>(&wall.texture_split_z_upper), sizeof(float));
             
-            // USE MAPPED ID
+            // USE MAPPED ID for Portals
             int savedPortalId = -1;
             if (wall.portal_id >= 0 && portalIdMap.contains(wall.portal_id)) {
                 savedPortalId = portalIdMap[wall.portal_id];
             } else if (wall.portal_id >= 0) {
-                 qWarning() << "Warning: Wall points to non-existent portal ID:" << wall.portal_id;
+                 // qWarning() << "Warning: Wall points to non-existent portal ID:" << wall.portal_id;
             }
             out.writeRawData(reinterpret_cast<const char*>(&savedPortalId), sizeof(int));
             
             out.writeRawData(reinterpret_cast<const char*>(&wall.flags), sizeof(int));
         }
         
-        // Save hierarchy (parent and children)
-        out.writeRawData(reinterpret_cast<const char*>(&sector.parent_sector_id), sizeof(int));
-        int numChildren = sector.child_sector_ids.size();
-        out.writeRawData(reinterpret_cast<const char*>(&numChildren), sizeof(int));
+        // Save hierarchy (parent and children) - WITH REMAPPING
+        int savedParentId = -1;
+        if (sector.parent_sector_id >= 0 && sectorIdMap.contains(sector.parent_sector_id)) {
+            savedParentId = sectorIdMap[sector.parent_sector_id];
+        }
+        out.writeRawData(reinterpret_cast<const char*>(&savedParentId), sizeof(int));
+        
+        // Remap children
+        QVector<int> remappedChildren;
         for (int childId : sector.child_sector_ids) {
+            if (sectorIdMap.contains(childId)) {
+                remappedChildren.append(sectorIdMap[childId]);
+            }
+        }
+        
+        int numChildren = remappedChildren.size();
+        out.writeRawData(reinterpret_cast<const char*>(&numChildren), sizeof(int));
+        for (int childId : remappedChildren) {
             out.writeRawData(reinterpret_cast<const char*>(&childId), sizeof(int));
         }
     }
@@ -444,6 +518,43 @@ bool RayMapFormat::saveMap(const QString &filename, const MapData &mapData,
         uint32_t typeLen = typeBytes.size();
         out.writeRawData(reinterpret_cast<const char*>(&typeLen), sizeof(uint32_t));
         out.writeRawData(typeBytes.data(), typeLen);
+        
+        // Behavior (v10)
+        int32_t actType = static_cast<int32_t>(entity.activationType);
+        out.writeRawData(reinterpret_cast<const char*>(&actType), sizeof(int32_t));
+        
+        int32_t visible = entity.isVisible ? 1 : 0;
+        out.writeRawData(reinterpret_cast<const char*>(&visible), sizeof(int32_t));
+        
+        QByteArray collBytes = entity.collisionTarget.toUtf8();
+        uint32_t collLen = collBytes.size();
+        out.writeRawData(reinterpret_cast<const char*>(&collLen), sizeof(uint32_t));
+        out.writeRawData(collBytes.data(), collLen);
+        
+        QByteArray actionBytes = entity.customAction.toUtf8();
+        uint32_t actionLen = actionBytes.size();
+        out.writeRawData(reinterpret_cast<const char*>(&actionLen), sizeof(uint32_t));
+        out.writeRawData(actionBytes.data(), actionLen);
+        
+        QByteArray eventBytes = entity.eventName.toUtf8();
+        uint32_t eventLen = eventBytes.size();
+        out.writeRawData(reinterpret_cast<const char*>(&eventLen), sizeof(uint32_t));
+        out.writeRawData(eventBytes.data(), eventLen);
+        
+        // Player & Controls (v11)
+        int32_t isPlayer = entity.isPlayer ? 1 : 0;
+        out.writeRawData(reinterpret_cast<const char*>(&isPlayer), sizeof(int32_t));
+        
+        int32_t ctrlType = static_cast<int32_t>(entity.controlType);
+        out.writeRawData(reinterpret_cast<const char*>(&ctrlType), sizeof(int32_t));
+        
+        int32_t camFollow = entity.cameraFollow ? 1 : 0;
+        out.writeRawData(reinterpret_cast<const char*>(&camFollow), sizeof(int32_t));
+        
+        out.writeRawData(reinterpret_cast<const char*>(&entity.cameraOffset_x), sizeof(float));
+        out.writeRawData(reinterpret_cast<const char*>(&entity.cameraOffset_y), sizeof(float));
+        out.writeRawData(reinterpret_cast<const char*>(&entity.cameraOffset_z), sizeof(float));
+        out.writeRawData(reinterpret_cast<const char*>(&entity.cameraRotation), sizeof(float));
     }
     
     /* Flush */

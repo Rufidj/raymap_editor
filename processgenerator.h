@@ -8,15 +8,28 @@
 class ProcessGenerator
 {
 public:
-    // Generate process code for an entity type
+    // Generate process code for an entity type (legacy)
     static QString generateProcessCode(const QString &processName, 
                                       const QString &assetPath,
                                       const QString &type,
                                       const QString &wrapperOpen = "",
                                       const QString &wrapperClose = "");
     
+    // Generate process code with behavior (NEW)
+    static QString generateProcessCodeWithBehavior(const EntityInstance &entity,
+                                                  const QString &wrapperOpen = "",
+                                                  const QString &wrapperClose = "");
+    
     // Generate includes section for main.prg
     static QString generateIncludesSection(const QVector<EntityInstance> &entities);
+    
+    // Generate ALL process definitions inline (to avoid include issues)
+    static QString generateAllProcessesCode(const QVector<EntityInstance> &entities,
+                                          const QString &wrapperOpen = "",
+                                          const QString &wrapperClose = "");
+    
+    // Generate declarations section (DECLARE PROCESS ...)
+    static QString generateDeclarationsSection(const QVector<EntityInstance> &entities);
     
     // Generate spawn calls for main.prg
     static QString generateSpawnCalls(const QVector<EntityInstance> &entities);

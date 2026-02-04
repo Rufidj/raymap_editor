@@ -34,6 +34,42 @@ bool CameraPathIO::save(const CameraPath &path, const QString &filename)
     return true;
 }
 
+bool CameraPathIO::saveBinary(const CameraPath &path, const QString &filename)
+{
+    QFile file(filename);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    
+    QDataStream out(&file);
+    out.setByteOrder(QDataStream::LittleEndian); 
+    
+    int count = path.keyframes().size();
+    out.writeRawData(reinterpret_cast<const char*>(&count), sizeof(int));
+    
+    for (const CameraKeyframe &kf : path.keyframes()) {
+        float val;
+        val = kf.x; out.writeRawData(reinterpret_cast<const char*>(&val), sizeof(float));
+        val = kf.y; out.writeRawData(reinterpret_cast<const char*>(&val), sizeof(float));
+        val = kf.z; out.writeRawData(reinterpret_cast<const char*>(&val), sizeof(float));
+        
+        val = kf.yaw; out.writeRawData(reinterpret_cast<const char*>(&val), sizeof(float));
+        val = kf.pitch; out.writeRawData(reinterpret_cast<const char*>(&val), sizeof(float));
+        val = kf.roll; out.writeRawData(reinterpret_cast<const char*>(&val), sizeof(float));
+        
+        val = kf.fov; out.writeRawData(reinterpret_cast<const char*>(&val), sizeof(float));
+        val = kf.time; out.writeRawData(reinterpret_cast<const char*>(&val), sizeof(float));
+        val = kf.duration; out.writeRawData(reinterpret_cast<const char*>(&val), sizeof(float));
+        
+        int easing;
+        easing = (int)kf.easeIn; out.writeRawData(reinterpret_cast<const char*>(&easing), sizeof(int));
+        easing = (int)kf.easeOut; out.writeRawData(reinterpret_cast<const char*>(&easing), sizeof(int));
+    }
+    
+    file.close();
+    return true;
+}
+
 CameraPath CameraPathIO::load(const QString &filename, bool *ok)
 {
     CameraPath path;

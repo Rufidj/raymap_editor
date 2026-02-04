@@ -123,14 +123,26 @@ QString CodeGenerator::getMainTemplate()
         "// Proyecto: {{PROJECT_NAME}}\n"
         "// Fecha: {{DATE}}\n"
         "\n"
-        "import \"mod_gfx\";\n"
-        "import \"mod_input\";\n"
-        "import \"mod_misc\";\n"
+        "import \"libmod_gfx\";\n"
+        "import \"libmod_input\";\n"
+        "import \"libmod_misc\";\n"
         "import \"libmod_ray\";\n"
         "\n"
         "{{ANDROID_HELPER_CODE}}\n"
         "\n"
-        "{{ENTITY_INCLUDES}}\n"
+        "// Constantes de entidad\n"
+        "// [[ED_CONSTANTS_START]]\n"
+        "CONST\n"
+        "    TYPE_PLAYER = 1;\n"
+        "    TYPE_ENEMY  = 2;\n"
+        "    TYPE_OBJECT = 3;\n"
+        "    TYPE_TRIGGER = 4;\n"
+        "END\n"
+        "// [[ED_CONSTANTS_END]]\n"
+        "\n"
+        "// [[ED_DECLARATIONS_START]]\n"
+        "{{ENTITY_DECLARATIONS}}\n"
+        "// [[ED_DECLARATIONS_END]]\n"
         "\n"
         "GLOBAL\n"
         "    int screen_w = {{SCREEN_WIDTH}};\n"
@@ -138,6 +150,9 @@ QString CodeGenerator::getMainTemplate()
         "    int fpg_textures;\n"
         "    int fog_enabled = 0;\n"
         "    int minimap_enabled = 1;\n"
+        "\n"
+        "    // Variables globales de mundo\n"
+        "    float WORLD_X, WORLD_Y, WORLD_Z;\n"
         "END\n"
         "\n"
         "PROCESS main()\n"
@@ -186,21 +201,15 @@ QString CodeGenerator::getMainTemplate()
         "    // Iniciar renderizado\n"
         "    ray_display();\n"
         "\n"
+        "    // [[ED_SPAWN_START]]\n"
         "    {{SPAWN_ENTITIES}}\n"
+        "    // [[ED_SPAWN_END]]\n"
         "\n"
         "    // Loop principal\n"
         "    LOOP\n"
-        "        // Movimiento\n"
-        "        if (key(_w)) RAY_MOVE_FORWARD(move_speed); end\n"
-        "        if (key(_s)) RAY_MOVE_BACKWARD(move_speed); end\n"
-        "        if (key(_a)) RAY_STRAFE_LEFT(move_speed); end\n"
-        "        if (key(_d)) RAY_STRAFE_RIGHT(move_speed); end\n"
-        "\n"
-        "        // Cámara\n"
-        "        if (key(_left)) RAY_ROTATE(-rot_speed); end\n"
-        "        if (key(_right)) RAY_ROTATE(rot_speed); end\n"
-        "        if (key(_up)) RAY_LOOK_UP_DOWN(pitch_speed); end\n"
-        "        if (key(_down)) RAY_LOOK_UP_DOWN(-pitch_speed); end\n"
+        "        // [[ED_CONTROL_START]]\n"
+        "        {{MOVEMENT_LOGIC}}\n"
+        "        // [[ED_CONTROL_END]]\n"
         "\n"
         "        // Salto\n"
         "       \n"
@@ -227,6 +236,10 @@ QString CodeGenerator::getMainTemplate()
         "        FRAME;\n"
         "    END\n"
         "END\n"
+        "\n"
+        "// [[ED_PROCESSES_START]]\n"
+        "{{ENTITY_PROCESSES}}\n"
+        "// [[ED_PROCESSES_END]]\n"
     );
 }
 
@@ -271,13 +284,47 @@ QString CodeGenerator::generateMainPrgWithEntities(const QVector<EntityInstance>
         return "";
     }
     
-    // Generate entity includes
-    QString entityIncludes = ProcessGenerator::generateIncludesSection(entities);
-    setVariable("ENTITY_INCLUDES", entityIncludes);
+    // Generate entity declarations
+    QString entityDeclarations = ProcessGenerator::generateDeclarationsSection(entities);
+    setVariable("ENTITY_DECLARATIONS", entityDeclarations);
+    
+    // Generate entity processes (Inline instead of includes)
+    QString wrapperOpen = m_variables.value("ASSET_WRAPPER_OPEN", "");
+    QString wrapperClose = m_variables.value("ASSET_WRAPPER_CLOSE", "");
+    QString entityProcesses = ProcessGenerator::generateAllProcessesCode(entities, wrapperOpen, wrapperClose);
+    setVariable("ENTITY_PROCESSES", entityProcesses);
+    setVariable("ENTITY_INCLUDES", ""); // Clear old variable for safety
     
     // Generate spawn calls
     QString spawnCalls = ProcessGenerator::generateSpawnCalls(entities);
     setVariable("SPAWN_ENTITIES", spawnCalls);
+    
+    // Determine movement logic
+    bool hasPlayer = false;
+    for (const auto &e : entities) {
+        if (e.isPlayer) {
+            hasPlayer = true;
+            break;
+        }
+    }
+    
+    QString movement;
+    if (hasPlayer) {
+        movement = "        // Movimiento por entidad (Jugador detectado)\n";
+        movement += "        RAY_CAMERA_UPDATE(0.017);";
+    } else {
+        movement =  "        // Movimiento libre de cámara\n"
+                    "        if (key(_w)) RAY_MOVE_FORWARD(move_speed); end\n"
+                    "        if (key(_s)) RAY_MOVE_BACKWARD(move_speed); end\n"
+                    "        if (key(_a)) RAY_STRAFE_LEFT(move_speed); end\n"
+                    "        if (key(_d)) RAY_STRAFE_RIGHT(move_speed); end\n"
+                    "        if (key(_left)) RAY_ROTATE(-rot_speed); end\n"
+                    "        if (key(_right)) RAY_ROTATE(rot_speed); end\n"
+                    "        if (key(_up)) RAY_LOOK_UP_DOWN(pitch_speed); end\n"
+                    "        if (key(_down)) RAY_LOOK_UP_DOWN(-pitch_speed); end\n"
+                    "        RAY_CAMERA_UPDATE(0.017);";
+    }
+    setVariable("MOVEMENT_LOGIC", movement);
     
     QString template_text = getMainTemplate();
     return processTemplate(template_text);
@@ -306,4 +353,161 @@ QString CodeGenerator::generateEntityModel(const QString &processName, const QSt
         "    END\n"
         "END\n"
     ).arg(processName).arg(loadStr);
+}
+
+QString CodeGenerator::generateCameraController()
+{
+    return getCameraControllerTemplate();
+}
+
+QString CodeGenerator::getCameraControllerTemplate()
+{
+    return QString(
+        "/* Camera Controller Module - Auto-generated */\n"
+        "#ifndef CAMERA_CONTROLLER_H\n"
+        "#define CAMERA_CONTROLLER_H\n"
+        "\n"
+        "import \"libmod_file\";\n"
+        "import \"libmod_mem\";\n"
+        "import \"libmod_math\";\n"
+        "\n"
+        "TYPE CameraKeyframe\n"
+        "    float x, y, z;\n"
+        "    float yaw, pitch, roll;\n"
+        "    float fov;\n"
+        "    float time;\n"
+        "    float duration;\n"
+        "    int easeIn, easeOut;\n"
+        "END\n"
+        "\n"
+        "TYPE CameraPathData\n"
+        "    int num_keyframes;\n"
+        "    CameraKeyframe pointer keyframes;\n"
+        "END\n"
+        "\n"
+        "/* Load binary camera path (.cam) */\n"
+        "FUNCTION int LoadCameraPath(string filename, CameraPathData pointer out_data)\n"
+        "PRIVATE\n"
+        "    int f;\n"
+        "    int count;\n"
+        "    int i;\n"
+        "BEGIN\n"
+        "    f = fopen(filename, O_READ);\n"
+        "    if (f == 0) return -1; end\n"
+        "\n"
+        "    fread(f, count);\n"
+        "    out_data.num_keyframes = count;\n"
+        "    if (count > 0)\n"
+        "        out_data.keyframes = alloc(count * sizeof(CameraKeyframe));\n"
+        "    end\n"
+        "\n"
+        "    for (i=0; i<count; i++)\n"
+        "        fread(f, out_data.keyframes[i].x);\n"
+        "        fread(f, out_data.keyframes[i].y);\n"
+        "        fread(f, out_data.keyframes[i].z);\n"
+        "        fread(f, out_data.keyframes[i].yaw);\n"
+        "        fread(f, out_data.keyframes[i].pitch);\n"
+        "        fread(f, out_data.keyframes[i].roll);\n"
+        "        fread(f, out_data.keyframes[i].fov);\n"
+        "        fread(f, out_data.keyframes[i].time);\n"
+        "        fread(f, out_data.keyframes[i].duration);\n"
+        "        fread(f, out_data.keyframes[i].easeIn);\n"
+        "        fread(f, out_data.keyframes[i].easeOut);\n"
+        "    end\n"
+        "\n"
+        "    fclose(f);\n"
+        "    return 0;\n"
+        "END\n"
+        "\n"
+        "FUNCTION FreeCameraPath(CameraPathData pointer data)\n"
+        "BEGIN\n"
+        "    if (data.keyframes != NULL) free(data.keyframes); end\n"
+        "    data.num_keyframes = 0;\n"
+        "END\n"
+        "\n"
+        "/* Trigger Process */\n"
+        "PROCESS CameraTrigger(x, y, z, string file)\n"
+        "PRIVATE\n"
+        "    int player_id;\n"
+        "    int dist;\n"
+        "BEGIN\n"
+        "    LOOP\n"
+        "        player_id = get_id(type player);\n"
+        "        if (player_id)\n"
+        "            dist = abs(player_id.x - x) + abs(player_id.y - y);\n"
+        "            if (dist < 64)\n"
+        "                // Start Cutscene\n"
+        "                PlayCameraPath(file);\n"
+        "                // Only run once?\n"
+        "                break;\n"
+        "            end\n"
+        "        end\n"
+        "        FRAME;\n"
+        "    END\n"
+        "END\n"
+        "\n"
+        "// Placeholder for PlayCameraPath implementation\n"
+        "PROCESS PlayCameraPath(string filename)\n"
+        "PRIVATE\n"
+        "    CameraPathData data;\n"
+        "BEGIN\n"
+        "    if (LoadCameraPath(filename, &data) < 0) return; end\n"
+        "    // TODO: Interpolation loop\n"
+        "    say(\"Playing cutscene: \" + filename);\n"
+        "    // ...\n"
+        "    FreeCameraPath(&data);\n"
+        "END\n"
+        "\n"
+        "#endif\n"
+    );
+}
+
+QString CodeGenerator::generateCameraPathData(const QString &pathName, const struct CameraPath &path)
+{
+    // Implementation needed if generating .h files for paths
+    return ""; 
+}
+QString CodeGenerator::patchMainPrg(const QString &existingCode, const QVector<EntityInstance> &entities)
+{
+    QString newFullCode = generateMainPrgWithEntities(entities);
+    
+    // If the existing file doesn't have any markers, it's safer to return the existing code
+    // to prevent overwriting manual changes.
+    if (!existingCode.contains("// [[ED_CONSTANTS_START]]")) {
+        return existingCode;
+    }
+    
+    QString result = existingCode;
+    auto replaceBlock = [&](const QString &startMarker, const QString &endMarker, bool protectIfHasContent = false) {
+        int newStart = newFullCode.indexOf(startMarker);
+        int newEnd = newFullCode.indexOf(endMarker);
+        if (newStart == -1 || newEnd == -1) return;
+        newEnd += endMarker.length();
+        QString newBlock = newFullCode.mid(newStart, newEnd - newStart);
+        
+        int oldStart = result.indexOf(startMarker);
+        int oldEnd = result.indexOf(endMarker);
+        if (oldStart != -1 && oldEnd != -1) {
+            // Protect user's manual code
+            if (protectIfHasContent) {
+                int contentStart = oldStart + startMarker.length();
+                QString existingContent = result.mid(contentStart, oldEnd - contentStart).trimmed();
+                // If there's ANY meaningful content, don't touch it
+                if (existingContent.length() > 10) {
+                    return; // Skip - user has code here
+                }
+            }
+            
+            oldEnd += endMarker.length();
+            result.replace(oldStart, oldEnd - oldStart, newBlock);
+        }
+    };
+
+    replaceBlock("// [[ED_CONSTANTS_START]]", "// [[ED_CONSTANTS_END]]");
+    replaceBlock("// [[ED_DECLARATIONS_START]]", "// [[ED_DECLARATIONS_END]]");
+    replaceBlock("// [[ED_CONTROL_START]]", "// [[ED_CONTROL_END]]");
+    replaceBlock("// [[ED_SPAWN_START]]", "// [[ED_SPAWN_END]]");
+    replaceBlock("// [[ED_PROCESSES_START]]", "// [[ED_PROCESSES_END]]", true); // NEVER overwrite if has content
+    
+    return result;
 }

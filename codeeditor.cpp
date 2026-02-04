@@ -214,6 +214,7 @@ bool CodeEditor::saveFile(const QString &fileName)
 
     QTextStream out(&file);
     out << toPlainText();
+    out.flush();
     file.close();
 
     m_currentFile = fileName;

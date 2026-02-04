@@ -61,6 +61,9 @@ void MainWindow::setupBuildSystem()
 
 void MainWindow::onBuildProject()
 {
+    // Auto-save map before build
+    onSaveMap();
+
     QString projectPath;
     
     if (m_projectManager && m_projectManager->hasProject()) {
@@ -92,6 +95,9 @@ void MainWindow::onBuildProject()
 
 void MainWindow::onRunProject()
 {
+    // Auto-save map before run
+    onSaveMap();
+
     QString projectPath;
     
     if (m_projectManager && m_projectManager->hasProject()) {
@@ -113,6 +119,9 @@ void MainWindow::onRunProject()
 
 void MainWindow::onBuildAndRun()
 {
+    // Auto-save map before build & run
+    onSaveMap();
+
     QString projectPath;
     
     if (m_projectManager && m_projectManager->hasProject()) {
@@ -234,48 +243,59 @@ void MainWindow::onGenerateCode()
         entities = editor->mapData()->entities;
     }
     
-    // Generate entity process files
-    int entityFilesGenerated = 0;
+    // Generate entity process code (inline in main.prg, not separate files)
+    QString allEntityProcesses;
+    int entityProcessCount = 0;
     if (!entities.isEmpty()) {
         QStringList uniqueProcesses = ProcessGenerator::getUniqueProcessNames(entities);
         
         for (const QString &processName : uniqueProcesses) {
-            // Find first entity with this process name to get asset info
+            // Find first entity with this process name to get full entity data
             for (const EntityInstance &entity : entities) {
                 if (entity.processName == processName) {
-                    QString code = ProcessGenerator::generateProcessCode(
-                        processName, 
-                        entity.assetPath, 
-                        entity.type
-                    );
+                    // Generate code with behavior
+                    QString processCode = ProcessGenerator::generateProcessCodeWithBehavior(entity);
+                    allEntityProcesses += processCode + "\n";
+                    entityProcessCount++;
                     
-                    if (ProcessGenerator::saveProcessFile(
-                        m_projectManager->getProjectPath(), 
-                        processName, 
-                        code)) {
-                        entityFilesGenerated++;
-                        if (m_consoleWidget)
-                            m_consoleWidget->sendText("  Generated: src/includes/" + processName + ".h\n");
-                    }
+                    if (m_consoleWidget)
+                        m_consoleWidget->sendText(QString("  Generated process: %1 (Activation: %2)\n")
+                            .arg(processName)
+                            .arg(entity.activationType == EntityInstance::ACTIVATION_ON_START ? "On Start" :
+                                 entity.activationType == EntityInstance::ACTIVATION_ON_COLLISION ? "On Collision" :
+                                 entity.activationType == EntityInstance::ACTIVATION_ON_TRIGGER ? "On Trigger" :
+                                 entity.activationType == EntityInstance::ACTIVATION_ON_EVENT ? "On Event" : "Manual"));
                     break;
                 }
             }
         }
     }
 
+
     // Generate main.prg with entities
     QString code;
-    if (!entities.isEmpty()) {
-        code = generator.generateMainPrgWithEntities(entities);
+    QString mainPath = m_projectManager->getProjectPath() + "/src/main.prg";
+    bool fileExists = QFile::exists(mainPath);
+    
+    if (fileExists) {
+        // Read existing code to patch it
+        QFile existingFile(mainPath);
+        if (existingFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QString existingCode = QString::fromUtf8(existingFile.readAll());
+            existingFile.close();
+            code = generator.patchMainPrg(existingCode, entities);
+        } else {
+            code = generator.generateMainPrgWithEntities(entities);
+        }
     } else {
-        code = generator.generateMainPrg();
+        code = generator.generateMainPrgWithEntities(entities);
     }
 
     // Save to file
     QString srcDir = m_projectManager->getProjectPath() + "/src";
     QDir().mkpath(srcDir);
     
-    QFile file(srcDir + "/main.prg");
+    QFile file(mainPath);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         file.write(code.toUtf8());
         file.close();
@@ -284,8 +304,8 @@ void MainWindow::onGenerateCode()
             m_consoleWidget->sendText("  Main: src/main.prg\n");
             m_consoleWidget->sendText("  Map: " + mapPath + "\n");
             m_consoleWidget->sendText("  FPG: " + fpgPath + "\n");
-            if (entityFilesGenerated > 0) {
-                m_consoleWidget->sendText("  Entity types: " + QString::number(entityFilesGenerated) + "\n");
+            if (entityProcessCount > 0) {
+                m_consoleWidget->sendText("  Entity types: " + QString::number(entityProcessCount) + "\n");
                 m_consoleWidget->sendText("  Entity instances: " + QString::number(entities.size()) + "\n");
             }
         }

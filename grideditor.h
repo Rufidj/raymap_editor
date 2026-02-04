@@ -68,6 +68,9 @@ public:
     // Entity modification
     void updateEntity(int index, const EntityInstance &entity);
     
+    // Hit testing
+    int findSectorAt(const QPointF &worldPos); // Made public for use in MainWindow
+    
 signals:
     void statusMessage(const QString &msg); // NEW: Consolidated status signal
     void sectorSelected(int sectorId);
@@ -82,6 +85,7 @@ signals:
     void decalPlaced(float x, float y);
     void entitySelected(int index, EntityInstance entity); // NEW
     void entityMoved(int index, EntityInstance entity); // NEW: While dragging
+    void requestEditEntityBehavior(int index, const EntityInstance &entity); // NEW: Request behavior editor
     
 
     
@@ -161,11 +165,14 @@ private:
     float pointToLineDistance(const QPointF &point, const QPointF &lineStart, const QPointF &lineEnd) const;
     
     // Hit testing
-    int findSectorAt(const QPointF &worldPos);
+
     int findWallAt(const QPointF &worldPos, float tolerance = 10.0f);
     int findEntityAt(const QPointF &worldPos, float tolerance = 10.0f);
     int findVertexAt(const QPointF &worldPos, int &sectorId, float tolerance = 10.0f);
     int findSpawnFlagAt(const QPointF &worldPos, float tolerance = 10.0f);
+    
+    // Auto-parent sector after move
+    void autoParentSector(int sectorIdx);
     
     QString m_fileName;
     bool m_showGrid;

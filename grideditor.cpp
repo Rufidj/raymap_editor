@@ -812,16 +812,34 @@ void GridEditor::mousePressEvent(QMouseEvent *event)
             case MODE_SELECT_SECTOR: {
                 int sectorIdx = findSectorAt(worldPos);
                 if (sectorIdx >= 0) {
-                    m_selectedSector = sectorIdx;
-                    m_selectedWallSector = -1;
-                    m_selectedWallIndex = -1;
-                    emit sectorSelected(m_mapData->sectors[sectorIdx].sector_id);
-                } else {
-                    // Start dragging if no sector found? Or just deselect?
-                    // For now, let's allow dragging if we click on void but are in logic for panning? 
-                    // No, panning is middle click.
+                    // Check if this sector belongs to a group
+                    int sectorId = m_mapData->sectors[sectorIdx].sector_id;
+                    int groupId = m_mapData->findGroupForSector(sectorId);
                     
-                    // Maybe deselect?
+                    if (groupId >= 0) {
+                        // Sector belongs to a group - auto-select group for movement
+                        setGroupMoveMode(groupId);
+                        m_groupMoveStart = worldPos;
+                        // Optional: Feedback?
+                        update();
+                        return;
+                    }
+
+                    // Check if we are clicking inside the ALREADY SELECTED sector
+                    if (sectorIdx == m_selectedSector) {
+                        // Start Dragging Sector
+                        m_isDraggingSector = true;
+                        m_dragStartPos = worldPos;
+                        setCursor(Qt::SizeAllCursor);
+                    } else {
+                        // Select new sector
+                        m_selectedSector = sectorIdx;
+                        m_selectedWallSector = -1;
+                        m_selectedWallIndex = -1;
+                        emit sectorSelected(m_mapData->sectors[sectorIdx].sector_id);
+                    }
+                } else {
+                    // Deselect?
                     // m_selectedSector = -1;
                     // emit sectorSelected(-1);
                 }
@@ -1074,6 +1092,10 @@ void GridEditor::mouseReleaseEvent(QMouseEvent *event)
         if (m_isDraggingSector) {
             m_isDraggingSector = false;
             setCursor(Qt::ArrowCursor);
+            
+            // Auto-detect parent
+            autoParentSector(m_selectedSector);
+            
             emit mapChanged(); // Ensure final position is synced
         }
         if (m_isDraggingEntity) {
@@ -1116,11 +1138,36 @@ void GridEditor::contextMenuEvent(QContextMenuEvent *event)
         
         QMenu menu(this);
         QFileInfo info(ent.assetPath);
+        QAction *editBehaviorAction = menu.addAction(tr("Editar Comportamiento..."));
+        menu.addSeparator();
         QAction *deleteAction = menu.addAction(tr("Eliminar Entidad '%1' (ID %2)").arg(info.fileName()).arg(ent.spawn_id));
         
         QAction *selectedItem = menu.exec(event->globalPos());
-        if (selectedItem == deleteAction) {
+        if (selectedItem == editBehaviorAction) {
+            emit requestEditEntityBehavior(entityIdx, ent);
+        } else if (selectedItem == deleteAction) {
+            // Find and remove associated spawn flag
+            int spawnId = ent.spawn_id;
+            for (int i = 0; i < m_mapData->spawnFlags.size(); ++i) {
+                if (m_mapData->spawnFlags[i].flagId == spawnId) {
+                    m_mapData->spawnFlags.removeAt(i);
+                    break;
+                }
+            }
+            
+            // Remove entity
             m_mapData->entities.removeAt(entityIdx);
+            
+            // Clear selection if this entity was selected
+            if (m_selectedEntity == entityIdx) {
+                m_selectedEntity = -1;
+                EntityInstance empty;
+                emit entitySelected(-1, empty);
+            } else if (m_selectedEntity > entityIdx) {
+                // Adjust selection index if needed
+                m_selectedEntity--;
+            }
+            
             emit mapChanged();
             update();
         }
@@ -1137,6 +1184,25 @@ void GridEditor::contextMenuEvent(QContextMenuEvent *event)
         
         QAction *selectedItem = menu.exec(event->globalPos());
         if (selectedItem == deleteAction) {
+            // Find and remove associated entity
+            int flagId = flag.flagId;
+            for (int i = 0; i < m_mapData->entities.size(); ++i) {
+                if (m_mapData->entities[i].spawn_id == flagId) {
+                    m_mapData->entities.removeAt(i);
+                    
+                    // Clear selection if this entity was selected
+                    if (m_selectedEntity == i) {
+                        m_selectedEntity = -1;
+                        EntityInstance empty;
+                        emit entitySelected(-1, empty);
+                    } else if (m_selectedEntity > i) {
+                        m_selectedEntity--;
+                    }
+                    break;
+                }
+            }
+            
+            // Remove spawn flag
             m_mapData->spawnFlags.removeAt(flagIdx);
             emit mapChanged();
             update();
@@ -1330,6 +1396,25 @@ void GridEditor::dropEvent(QDropEvent *event)
                 
             update();
             event->acceptProposedAction();
+        } else if (ext == "campath") {
+            // Camera Path Trigger
+            QPointF dropPos = screenToWorld(event->position().toPoint());
+            
+            EntityInstance entity;
+            entity.assetPath = filePath;
+            entity.type = "campath";
+            
+            QString baseName = info.completeBaseName();
+            entity.processName = baseName;
+            
+            entity.x = dropPos.x();
+            entity.y = dropPos.y();
+            entity.z = 0.0f;
+            entity.spawn_id = m_mapData->getNextSpawnEntityId();
+            
+            m_mapData->entities.append(entity);
+            update();
+            event->acceptProposedAction();
         }
     }
 }
@@ -1338,10 +1423,14 @@ void GridEditor::drawEntities(QPainter &painter)
 {
     if (!m_mapData) return;
 
-    painter.setBrush(QBrush(QColor(0, 200, 255))); // Cyan for entities
-    painter.setPen(QPen(QColor(0, 100, 200), 2));
-    
     for (const EntityInstance &entity : m_mapData->entities) {
+        if (entity.type == "campath") {
+            painter.setBrush(QBrush(QColor(255, 128, 0))); // Orange for paths
+            painter.setPen(QPen(QColor(255, 100, 0), 2));
+        } else {
+            painter.setBrush(QBrush(QColor(0, 200, 255))); // Cyan for entities
+            painter.setPen(QPen(QColor(0, 100, 200), 2));
+        }
         QPoint pos = worldToScreen(QPointF(entity.x, entity.y));
         
         // Draw diamond shape
@@ -1352,6 +1441,22 @@ void GridEditor::drawEntities(QPainter &painter)
                 << QPoint(pos.x() - 6, pos.y());
         
         painter.drawPolygon(diamond);
+        
+        // Draw rotation indicator for models and players
+        if (entity.type == "model" || entity.isPlayer) {
+             // 0=North (Up), 90=West (Left), 180=South (Down), 270=East (Right)
+             // Trig: 0=East. So North is +90.
+             // Screen Y is inverted (Down is +). So Up is -.
+             
+             float rad = (entity.angle + 90.0f) * 3.14159f / 180.0f;
+             QPoint lineEnd(pos.x() + cos(rad)*15, pos.y() - sin(rad)*15);
+             
+             painter.setPen(QPen(QColor(255, 255, 0), 2));
+             painter.drawLine(pos, lineEnd);
+             
+             // Draw arrow head
+             // ...
+        }
         
         // Draw entity name/asset
         painter.setPen(QPen(QColor(200, 255, 255), 1));
@@ -1367,5 +1472,72 @@ void GridEditor::updateEntity(int index, const EntityInstance &entity)
         m_mapData->entities[index] = entity;
         emit mapChanged();
         update();
+    }
+}
+
+void GridEditor::autoParentSector(int sectorIdx) {
+    if (!m_mapData || sectorIdx < 0 || sectorIdx >= m_mapData->sectors.size()) return;
+    
+    Sector &current = m_mapData->sectors[sectorIdx];
+    int bestParentIdx = -1;
+    float bestParentArea = 1e20f; 
+    
+    QPolygonF currentPoly;
+    for(const auto &v : current.vertices) currentPoly << v;
+    QRectF currentRect = currentPoly.boundingRect();
+    
+    for (int i = 0; i < m_mapData->sectors.size(); i++) {
+        if (i == sectorIdx) continue;
+        
+        const Sector &other = m_mapData->sectors[i];
+        QPolygonF otherPoly;
+        for(const auto &v : other.vertices) otherPoly << v;
+        
+        // Fast AABB check first
+        if (!otherPoly.boundingRect().contains(currentRect)) continue;
+
+        // Check center
+        if (otherPoly.containsPoint(currentRect.center(), Qt::OddEvenFill)) {
+            // Check all vertices
+            bool allInside = true;
+            for(const auto &v : current.vertices) {
+                if (!otherPoly.containsPoint(v, Qt::OddEvenFill)) {
+                    allInside = false; 
+                    break;
+                }
+            }
+            
+            if (allInside) {
+                // Use area to find the tightest fit (smallest parent)
+                float area = otherPoly.boundingRect().width() * otherPoly.boundingRect().height();
+                if (area < bestParentArea) {
+                     bestParentArea = area;
+                     bestParentIdx = i;
+                }
+            }
+        }
+    }
+    
+    int newParentId = (bestParentIdx >= 0) ? m_mapData->sectors[bestParentIdx].sector_id : -1;
+    
+    if (current.parent_sector_id != newParentId) {
+        // Remove from old parent
+        if (current.parent_sector_id >= 0) {
+             for(int i=0; i<m_mapData->sectors.size(); i++) {
+                  if (m_mapData->sectors[i].sector_id == current.parent_sector_id) {
+                      m_mapData->sectors[i].child_sector_ids.removeAll(current.sector_id);
+                      break;
+                  }
+             }
+        }
+        
+        current.parent_sector_id = newParentId;
+        
+        // Add to new parent
+        if (bestParentIdx >= 0) { // Using index directly as we have it
+             if (!m_mapData->sectors[bestParentIdx].child_sector_ids.contains(current.sector_id)) {
+                 m_mapData->sectors[bestParentIdx].child_sector_ids.append(current.sector_id);
+             }
+        }
     }
 }

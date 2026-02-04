@@ -255,6 +255,24 @@ void MainWindow::regenerateEntityScripts(const ProjectData *customData)
             }
         }
     }
+    
+    // Update main.prg includes
+    QString mainPrgPath = m_projectManager->getProjectPath() + "/src/main.prg";
+    QFile mainFile(mainPrgPath);
+    if (mainFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QString mainCode = QString::fromUtf8(mainFile.readAll());
+        mainFile.close();
+        
+        QString updatedCode = generator.patchMainPrg(mainCode, mapData->entities);
+        
+        if (updatedCode != mainCode) {
+            if (mainFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                mainFile.write(updatedCode.toUtf8());
+                mainFile.close();
+                qDebug() << "Updated main.prg includes";
+            }
+        }
+    }
 }
 
 void MainWindow::openProject(const QString &path)

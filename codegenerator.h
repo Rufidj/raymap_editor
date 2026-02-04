@@ -22,6 +22,7 @@ public:
     // Main generation
     QString generateMainPrg();
     QString generateMainPrgWithEntities(const QVector<EntityInstance> &entities);
+    QString patchMainPrg(const QString &existingCode, const QVector<EntityInstance> &entities);
     
     QString getWrapperOpen() const { return m_variables.value("ASSET_WRAPPER_OPEN"); }
     QString getWrapperClose() const { return m_variables.value("ASSET_WRAPPER_CLOSE"); }
@@ -30,6 +31,10 @@ public:
     QString generateEntityProcess(const QString &entityName, const QString &entityType);
     QString generateEntityModel(const QString &processName, const QString &modelPath);
     
+    // Camera System
+    QString generateCameraController(); // Generates includes/camera_controller.h
+    QString generateCameraPathData(const QString &pathName, const struct CameraPath &path);
+
 private:
     ProjectData m_projectData;
     QMap<QString, QString> m_variables;
@@ -38,6 +43,7 @@ private:
     QString getMainTemplate();
     QString getPlayerTemplate();
     QString getEnemyTemplate();
+    QString getCameraControllerTemplate();
 };
 
 #endif // CODEGENERATOR_H

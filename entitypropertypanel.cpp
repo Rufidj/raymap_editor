@@ -37,7 +37,14 @@ EntityPropertyPanel::EntityPropertyPanel(QWidget *parent)
     
     m_zSpin = new QDoubleSpinBox();
     setupSpinBox(m_zSpin, " u");
+    setupSpinBox(m_zSpin, " u");
     layout->addRow(tr("Altura Z:"), m_zSpin);
+    
+    m_angleSpin = new QDoubleSpinBox();
+    setupSpinBox(m_angleSpin, "°");
+    m_angleSpin->setRange(0.0, 360.0);
+    m_angleSpin->setWrapping(true);
+    layout->addRow(tr("Ángulo:"), m_angleSpin);
     
     mainLayout->addWidget(groupBox);
     mainLayout->addStretch();
@@ -68,6 +75,7 @@ void EntityPropertyPanel::setEntity(int index, const EntityInstance &entity)
     m_xSpin->setValue(entity.x);
     m_ySpin->setValue(entity.y);
     m_zSpin->setValue(entity.z);
+    m_angleSpin->setValue(entity.angle);
     
     setEnabled(true);
     m_updating = false;
@@ -84,6 +92,7 @@ void EntityPropertyPanel::clearSelection()
     m_xSpin->setValue(0);
     m_ySpin->setValue(0);
     m_zSpin->setValue(0);
+    m_angleSpin->setValue(0);
     
     setEnabled(false);
     m_updating = false;
@@ -96,6 +105,7 @@ void EntityPropertyPanel::onValueChanged()
     m_currentEntity.x = m_xSpin->value();
     m_currentEntity.y = m_ySpin->value();
     m_currentEntity.z = m_zSpin->value();
+    m_currentEntity.angle = m_angleSpin->value();
     
     emit entityChanged(m_currentIndex, m_currentEntity);
 }

@@ -37,6 +37,7 @@ private:
     QDoubleSpinBox *m_xSpin;
     QDoubleSpinBox *m_ySpin; // Depth (RayMap Z / GL Z)
     QDoubleSpinBox *m_zSpin; // Height (RayMap Y / GL Y) - wait, check coordinate system
+    QDoubleSpinBox *m_angleSpin; // Rotation
     
     // In RayMap data:
     // x, y (2D map coordinates), z (height)

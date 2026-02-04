@@ -23,6 +23,7 @@
 #include "textureatlasgen.h"
 #include "md3generator.h"
 #include "assetbrowser.h" 
+#include "entitybehaviordialog.h"
 #include "buildmanager.h"
 #include "projectmanager.h"
 #include <QToolBar>
@@ -45,7 +46,9 @@
 #include <algorithm> // for std::max/min // Added based on instruction
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDialogButtonBox>
 #include "objimportdialog.h"
+#include "fonteditordialog.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -325,7 +328,12 @@ void MainWindow::createMenus()
     QAction *objImportAction = new QAction(tr("Conversor OBJ a MD3..."), this);
     objImportAction->setShortcut(QKeySequence(tr("Ctrl+Shift+O")));
     connect(objImportAction, &QAction::triggered, this, &MainWindow::openObjConverter);
+    
+    // Font Editor
+    m_fontEditorAction = new QAction(tr("Editor de Fuentes (FNT/FNX)..."), this);
+    connect(m_fontEditorAction, &QAction::triggered, this, &MainWindow::onOpenFontEditor);
     toolsMenu->addAction(objImportAction);
+    toolsMenu->addAction(m_fontEditorAction);
     
     // === BUILD MENU ===
     QMenu *buildMenu = menuBar()->addMenu(tr("&Compilar"));
@@ -705,10 +713,10 @@ void MainWindow::createDockWindows()
     // Created here to ensure correct tab order/stacking
     m_assetBrowser = new AssetBrowser(this);
     m_assetDock = new QDockWidget(tr("Explorador de Archivos"), this);
-    m_assetDock->setObjectName("AssetBrowserDock_v2"); // Unique name to avoid old settings
+    m_assetDock->setObjectName("AssetBrowserDock_v3_Left"); // Changed name to force left position
     m_assetDock->setWidget(m_assetBrowser);
     m_assetDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
-    addDockWidget(Qt::RightDockWidgetArea, m_assetDock);
+    addDockWidget(Qt::LeftDockWidgetArea, m_assetDock);
     
     // Connect Asset Browser signals
     connect(m_assetBrowser, &AssetBrowser::mapFileRequested, this, [this](const QString &path){
@@ -889,6 +897,8 @@ void MainWindow::onNewMap()
     connect(editor, &GridEditor::cameraPlaced, this, &MainWindow::onCameraPlaced);
     connect(editor, &GridEditor::entitySelected, this, &MainWindow::onEntitySelected);
     connect(editor, &GridEditor::entityMoved, this, &MainWindow::onEntityChanged); // Live visual update
+    connect(editor, &GridEditor::requestEditEntityBehavior, this, &MainWindow::onEditEntityBehavior);
+    connect(editor, &GridEditor::sectorCreated, this, &MainWindow::updateSectorList);
     
     // Apply current textures to it
     editor->setTextures(m_textureCache);
@@ -928,6 +938,11 @@ void MainWindow::onSaveMap()
     
     if (RayMapFormat::saveMap(editor->fileName(), *editor->mapData())) {
         m_statusLabel->setText(tr("Mapa guardado: %1").arg(editor->fileName()));
+        
+        // Regenerate scripts if project is open
+        if (m_projectManager && m_projectManager->hasProject()) {
+            regenerateEntityScripts(); // Update entity headers and main.prg includes
+        }
     } else {
         QMessageBox::critical(this, tr("Error"), tr("No se pudo guardar el mapa."));
     }
@@ -1022,6 +1037,8 @@ void MainWindow::onImportWLD()
         connect(editor, &GridEditor::cameraPlaced, this, &MainWindow::onCameraPlaced);
         connect(editor, &GridEditor::entitySelected, this, &MainWindow::onEntitySelected);
         connect(editor, &GridEditor::entityMoved, this, &MainWindow::onEntityChanged);
+        connect(editor, &GridEditor::requestEditEntityBehavior, this, &MainWindow::onEditEntityBehavior);
+        connect(editor, &GridEditor::sectorCreated, this, &MainWindow::updateSectorList);
         
         m_tabWidget->addTab(editor, tr("Importado %1").arg(QFileInfo(filename).fileName()));
         m_tabWidget->setCurrentWidget(editor);
@@ -2519,7 +2536,7 @@ void MainWindow::onCreateRectangle()
     newSector.vertices.append(QPointF(-half, half));   // Top-left
     
     newSector.floor_z = 0.0f;
-    newSector.ceiling_z = 256.0f;
+    newSector.ceiling_z = 128.0f; // Default height for boxes (half room height)
     newSector.floor_texture_id = m_selectedTextureSpin->value();
     newSector.ceiling_texture_id = m_selectedTextureSpin->value();
     newSector.light_level = 255;
@@ -2540,12 +2557,26 @@ void MainWindow::onCreateRectangle()
         newSector.walls.append(wall);
     }
     
+    // Auto-detect parent sector (before adding new one)
+    int parentSectorIndex = editor->findSectorAt(QPointF(0, 0));
+
     map->sectors.append(newSector);
+    
+    if (parentSectorIndex >= 0) {
+        int newSectorIndex = map->sectors.size() - 1;
+        
+        // Link hierarchy only
+        map->sectors[newSectorIndex].parent_sector_id = map->sectors[parentSectorIndex].sector_id;
+        map->sectors[parentSectorIndex].child_sector_ids.append(newSector.sector_id);
+    
+        m_statusLabel->setText(tr("Rectángulo creado como hijo de Sector %1").arg(map->sectors[parentSectorIndex].sector_id));
+    }
+
     updateSectorList();
     editor->update();
     updateVisualMode();
     
-    m_statusLabel->setText(tr("Rectángulo %1x%1 creado (Sector %2)")
+    m_statusLabel->setText(tr("Rectángulo %1x%1 creado (Sector %2) - v2 Updated")
                           .arg(size).arg(newSector.sector_id));
 }
 
@@ -2567,20 +2598,29 @@ void MainWindow::onCreateCircle()
     Sector newSector;
     newSector.sector_id = map->getNextSectorId();
     
+    newSector.vertices = QVector<QPointF>();
+    
+    // Generate vertices CCW (Counter-Clockwise)
+    // In screen coords (Y down), 0->90->180 is CW.
+    // So we iterate backwards or negate angle to get CCW.
+    float centerX = 0.0f; 
+    float centerY = 0.0f;
     for (int i = 0; i < segments; i++) {
-        float angle = (float)i / segments * 2.0f * M_PI;
-        float x = radius * cosf(angle);
-        float y = radius * sinf(angle);
+        // Standard CW winding (0 -> 2PI)
+        float theta = 2.0f * M_PI * i / segments; 
+        float x = centerX + radius * cos(theta);
+        float y = centerY + radius * sin(theta);
+        
         newSector.vertices.append(QPointF(x, y));
     }
     
     newSector.floor_z = 0.0f;
-    newSector.ceiling_z = 256.0f;
+    newSector.ceiling_z = 128.0f; // Default height for cylinders (distinct from room)
     newSector.floor_texture_id = m_selectedTextureSpin->value();
     newSector.ceiling_texture_id = m_selectedTextureSpin->value();
     newSector.light_level = 255;
     
-    // Create walls
+    // Create walls in CW order
     for (int i = 0; i < segments; i++) {
         int next = (i + 1) % segments;
         Wall wall;
@@ -2596,7 +2636,21 @@ void MainWindow::onCreateCircle()
         newSector.walls.append(wall);
     }
     
+    // Auto-detect parent sector (before adding new one)
+    int parentSectorIndex = editor->findSectorAt(QPointF(0, 0));
+
     map->sectors.append(newSector);
+    
+    if (parentSectorIndex >= 0) {
+        int newSectorIndex = map->sectors.size() - 1;
+        
+        // Link hierarchy only
+        map->sectors[newSectorIndex].parent_sector_id = map->sectors[parentSectorIndex].sector_id;
+        map->sectors[parentSectorIndex].child_sector_ids.append(newSector.sector_id);
+        
+        m_statusLabel->setText(tr("Círculo creado como hijo de Sector %1").arg(map->sectors[parentSectorIndex].sector_id));
+    }
+
     updateSectorList();
     editor->update();
     updateVisualMode();
@@ -2647,67 +2701,66 @@ void MainWindow::onInsertBox()
     newSector.floor_texture_id = floorTexture;
     newSector.ceiling_texture_id = ceilingTexture;
     
-    // Create 4 walls (rectangle)
-    float hw = width / 2.0f;   // half width
-    float hh = height / 2.0f;  // half height
+    newSector.vertices.clear();
+    // Vertex order for CW rectangle: TL -> TR -> BR -> BL
+    // TL(min,min) -> TR(max,min) -> BR(max,max) -> BL(min,max)
     
-    // Wall 0: Bottom (left to right)
+    float hw = width / 2.0f;
+    float hh = height / 2.0f;
+    
+    QPointF vTL(centerX - hw, centerY - hh);
+    QPointF vTR(centerX + hw, centerY - hh);
+    QPointF vBR(centerX + hw, centerY + hh);
+    QPointF vBL(centerX - hw, centerY + hh);
+    
+    newSector.vertices.append(vTL);
+    newSector.vertices.append(vTR);
+    newSector.vertices.append(vBR);
+    newSector.vertices.append(vBL);
+    
+    // Wall 0: Top (Left to Right)
     Wall wall0;
-    wall0.wall_id = map->getNextWallId(); // Use unique ID generator
-    wall0.x1 = centerX - hw;
-    wall0.y1 = centerY - hh;
-    wall0.x2 = centerX + hw;
-    wall0.y2 = centerY - hh;
+    wall0.wall_id = map->getNextWallId();
+    wall0.x1 = vTL.x(); wall0.y1 = vTL.y();
+    wall0.x2 = vTR.x(); wall0.y2 = vTR.y();
     wall0.texture_id_lower = wallTexture;
     wall0.texture_id_middle = wallTexture;
     wall0.texture_id_upper = wallTexture;
     wall0.portal_id = -1;
     newSector.walls.append(wall0);
     
-    // Wall 1: Right (bottom to top)
+    // Wall 1: Right (Top to Bottom)
     Wall wall1;
     wall1.wall_id = map->getNextWallId();
-    wall1.x1 = centerX + hw;
-    wall1.y1 = centerY - hh;
-    wall1.x2 = centerX + hw;
-    wall1.y2 = centerY + hh;
+    wall1.x1 = vTR.x(); wall1.y1 = vTR.y();
+    wall1.x2 = vBR.x(); wall1.y2 = vBR.y();
     wall1.texture_id_lower = wallTexture;
     wall1.texture_id_middle = wallTexture;
     wall1.texture_id_upper = wallTexture;
     wall1.portal_id = -1;
     newSector.walls.append(wall1);
     
-    // Wall 2: Top (right to left)
+    // Wall 2: Bottom (Right to Left)
     Wall wall2;
     wall2.wall_id = map->getNextWallId();
-    wall2.x1 = centerX + hw;
-    wall2.y1 = centerY + hh;
-    wall2.x2 = centerX - hw;
-    wall2.y2 = centerY + hh;
+    wall2.x1 = vBR.x(); wall2.y1 = vBR.y();
+    wall2.x2 = vBL.x(); wall2.y2 = vBL.y();
     wall2.texture_id_lower = wallTexture;
     wall2.texture_id_middle = wallTexture;
     wall2.texture_id_upper = wallTexture;
     wall2.portal_id = -1;
     newSector.walls.append(wall2);
     
-    // Wall 3: Left (top to bottom)
+    // Wall 3: Left (Bottom to Top)
     Wall wall3;
     wall3.wall_id = map->getNextWallId();
-    wall3.x1 = centerX - hw;
-    wall3.y1 = centerY + hh;
-    wall3.x2 = centerX - hw;
-    wall3.y2 = centerY - hh;
+    wall3.x1 = vBL.x(); wall3.y1 = vBL.y();
+    wall3.x2 = vTL.x(); wall3.y2 = vTL.y();
     wall3.texture_id_lower = wallTexture;
     wall3.texture_id_middle = wallTexture;
     wall3.texture_id_upper = wallTexture;
     wall3.portal_id = -1;
     newSector.walls.append(wall3);
-    
-    // Create vertices for the sector (needed for moving/editing)
-    newSector.vertices.append(QPointF(centerX - hw, centerY - hh));  // Bottom-left
-    newSector.vertices.append(QPointF(centerX + hw, centerY - hh));  // Bottom-right
-    newSector.vertices.append(QPointF(centerX + hw, centerY + hh));  // Top-right
-    newSector.vertices.append(QPointF(centerX - hw, centerY + hh));  // Top-left
     
     // Add sector to map
     map->sectors.append(newSector);
@@ -3489,6 +3542,8 @@ void MainWindow::openMapFile(const QString &filename)
         connect(editor, &GridEditor::cameraPlaced, this, &MainWindow::onCameraPlaced);
         connect(editor, &GridEditor::entitySelected, this, &MainWindow::onEntitySelected);
         connect(editor, &GridEditor::entityMoved, this, &MainWindow::onEntityChanged);
+        connect(editor, &GridEditor::requestEditEntityBehavior, this, &MainWindow::onEditEntityBehavior);
+        connect(editor, &GridEditor::sectorCreated, this, &MainWindow::updateSectorList);
         
         m_tabWidget->addTab(editor, QFileInfo(filename).fileName());
         m_tabWidget->setCurrentWidget(editor);
@@ -3593,6 +3648,49 @@ void MainWindow::onEntityChanged(int index, EntityInstance entity)
     }
 }
 
+void MainWindow::onEditEntityBehavior(int index, const EntityInstance &entity)
+{
+    GridEditor *editor = getCurrentEditor();
+    if (!editor || !editor->mapData()) return;
+    
+    // Open behavior editor dialog
+    QStringList processes;
+    for (const auto &e : editor->mapData()->entities) {
+        if (!processes.contains(e.processName)) processes.append(e.processName);
+    }
+    
+    EntityBehaviorDialog dialog(entity, processes, this);
+    
+    if (dialog.exec() == QDialog::Accepted) {
+        // Update entity in map data
+        EntityInstance updatedEntity = dialog.getEntity();
+        
+        if (index >= 0 && index < editor->mapData()->entities.size()) {
+            editor->mapData()->entities[index] = updatedEntity;
+            
+            // Update entity panel if visible
+            if (m_entityPanel) {
+                m_entityPanel->setEntity(index, updatedEntity);
+            }
+            
+            // Update grid editor
+            editor->updateEntity(index, updatedEntity);
+            editor->update();
+            
+            // Update visual mode
+            if (m_visualModeWidget && m_visualModeWidget->isVisible()) {
+                m_visualModeWidget->setMapData(*editor->mapData(), false);
+            }
+            
+            // Mark as modified
+            emit editor->mapChanged();
+            
+            // Regenerate code with new behavior
+            onGenerateCode();
+        }
+    }
+}
+
 
 void MainWindow::openObjConverter()
 {
@@ -3634,4 +3732,10 @@ void MainWindow::addToRecentProjects(const QString &path)
         
     settings.setValue("recentProjects", files);
     updateRecentProjectsMenu();
+}
+
+void MainWindow::onOpenFontEditor()
+{
+    FontEditorDialog dialog(this);
+    dialog.exec();
 }

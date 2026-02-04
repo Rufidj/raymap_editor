@@ -65,6 +65,7 @@ private slots:
     void onOpenEffectGenerator();
     void onOpenCameraPathEditor();
     void onOpenMeshGenerator(); // NEW: MD3 Generator
+    void onOpenFontEditor(); // NEW: Font Editor
     
     // Project Management
     void onNewProject();
@@ -144,6 +145,7 @@ private slots:
     // Entity selection
     void onEntitySelected(int index, EntityInstance entity); // NEW
     void onEntityChanged(int index, EntityInstance entity); // NEW
+    void onEditEntityBehavior(int index, const EntityInstance &entity); // NEW: Edit entity behavior
     
     void updateSectorList();  // Refresh the sector tree
     void onSectorTreeContextMenu(const QPoint &pos); // Context menu slot
@@ -336,6 +338,8 @@ private:
     QAction *m_insertDoorAction;        // Future
     QAction *m_insertElevatorAction;    // Future
     QAction *m_insertStairsAction;      // Future
+    
+    QAction *m_fontEditorAction;
     
     // Helpers
     void updateWindowTitle();

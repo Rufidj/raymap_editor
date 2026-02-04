@@ -142,10 +142,60 @@ struct EntityInstance {
     QString type;
     int spawn_id;
     float x, y, z;
+    float angle; // Rotation in degrees (0-360)
     
-    EntityInstance() : spawn_id(0), x(0), y(0), z(0) {}
+    // ===== BEHAVIOR SYSTEM =====
+    enum ActivationType {
+        ACTIVATION_ON_START,
+        ACTIVATION_ON_COLLISION,
+        ACTIVATION_ON_TRIGGER,
+        ACTIVATION_MANUAL,
+        ACTIVATION_ON_EVENT
+    };
+    ActivationType activationType;
+    QString collisionTarget;
+    bool isVisible;
+    QString customAction;
+    QString eventName;
+    
+    // ===== PLAYER & CONTROL SYSTEM =====
+    bool isPlayer;
+    enum ControlType {
+        CONTROL_NONE,
+        CONTROL_FIRST_PERSON,
+        CONTROL_THIRD_PERSON,
+        CONTROL_CAR
+    };
+    ControlType controlType;
+    bool cameraFollow;
+    float cameraOffset_x, cameraOffset_y, cameraOffset_z;
+    float cameraRotation;
+    float initialRotation;  // Initial model rotation in degrees
+    
+    EntityInstance() : spawn_id(0), x(0), y(0), z(0), angle(0),
+                       activationType(ACTIVATION_ON_START),
+                       collisionTarget("TYPE_PLAYER"),
+                       isVisible(true),
+                       customAction(""),
+                       eventName(""),
+                       isPlayer(false),
+                       controlType(CONTROL_NONE),
+                       cameraFollow(false),
+                       cameraOffset_x(0), cameraOffset_y(0), cameraOffset_z(0),
+                       cameraRotation(0), initialRotation(0) {}
+                       
     EntityInstance(const QString &pname, const QString &asset, const QString &t, int id, float px, float py, float pz)
-        : processName(pname), assetPath(asset), type(t), spawn_id(id), x(px), y(py), z(pz) {}
+        : processName(pname), assetPath(asset), type(t), spawn_id(id), x(px), y(py), z(pz), angle(0),
+          activationType(ACTIVATION_ON_START),
+          collisionTarget("TYPE_PLAYER"),
+          isVisible(true),
+          customAction(""),
+          eventName(""),
+          isPlayer(false),
+          controlType(CONTROL_NONE),
+          cameraFollow(false),
+          cameraOffset_x(0), cameraOffset_y(0), cameraOffset_z(0),
+          cameraRotation(0), initialRotation(0) {}
 };
 
 /* ============================================================================

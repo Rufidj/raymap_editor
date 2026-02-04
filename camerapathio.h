@@ -10,6 +10,7 @@ class CameraPathIO
 {
 public:
     static bool save(const CameraPath &path, const QString &filename);
+    static bool saveBinary(const CameraPath &path, const QString &filename);
     static CameraPath load(const QString &filename, bool *ok = nullptr);
     
 private:

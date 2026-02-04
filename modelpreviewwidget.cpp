@@ -7,7 +7,12 @@ ModelPreviewWidget::ModelPreviewWidget(QWidget *parent)
     : QOpenGLWidget(parent)
     , m_xRot(30.0f)
     , m_yRot(-45.0f)
+    , m_zRot(0.0f)
+    , m_scale(1.0f)
     , m_zoom(-300.0f)
+    , m_modelOrientX(0.0f)
+    , m_modelOrientY(0.0f)
+    , m_modelOrientZ(0.0f)
 {
     // Explicitly request Compatibility Profile for this widget
     QSurfaceFormat format;
@@ -24,6 +29,26 @@ ModelPreviewWidget::~ModelPreviewWidget()
 void ModelPreviewWidget::setMesh(const MD3Generator::MeshData &mesh)
 {
     m_mesh = mesh;
+    update();
+}
+
+void ModelPreviewWidget::setRotation(float degrees)
+{
+    m_zRot = degrees;
+    update();
+}
+
+void ModelPreviewWidget::setScale(float scale)
+{
+    m_scale = scale;
+    update();
+}
+
+void ModelPreviewWidget::setModelOrientation(float xDeg, float yDeg, float zDeg)
+{
+    m_modelOrientX = xDeg;
+    m_modelOrientY = yDeg;
+    m_modelOrientZ = zDeg;
     update();
 }
 
@@ -73,6 +98,13 @@ void ModelPreviewWidget::paintGL()
     m_view.rotate(m_xRot, 1.0f, 0.0f, 0.0f);
     m_view.rotate(m_yRot, 0.0f, 1.0f, 0.0f);
     m_view.rotate(-90.0f, 1.0f, 0.0f, 0.0f);
+    
+    // Apply model transformations
+    m_view.rotate(m_modelOrientX, 1.0f, 0.0f, 0.0f);  // Model base orientation X
+    m_view.rotate(m_modelOrientY, 0.0f, 1.0f, 0.0f);  // Model base orientation Y
+    m_view.rotate(m_modelOrientZ, 0.0f, 0.0f, 1.0f);  // Model base orientation Z
+    m_view.rotate(m_zRot, 0.0f, 0.0f, 1.0f);  // Apply model rotation (game rotation)
+    m_view.scale(m_scale);  // Apply model scale
     
     glMatrixMode(GL_PROJECTION);
     glLoadMatrixf(m_projection.constData());

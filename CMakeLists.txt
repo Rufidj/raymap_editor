@@ -55,11 +55,13 @@ set(PROJECT_SOURCES
     codeeditordialog.h codeeditordialog.cpp
     md3loader.h md3loader.cpp
     entitypropertypanel.h entitypropertypanel.cpp
+    entitybehaviordialog.h entitybehaviordialog.cpp
     objtomd3converter.h objtomd3converter.cpp
     objimportdialog.h objimportdialog.cpp
     publishdialog.h publishdialog.cpp
     publisher.h publisher.cpp
     downloader.h downloader.cpp
+    fonteditordialog.h fonteditordialog.cpp
     resources.qrc
 )
 

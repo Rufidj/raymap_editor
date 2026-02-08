@@ -1384,16 +1384,8 @@ bool Publisher::publishWindows(const ProjectData &project, const PublishConfig &
         }
     }
     
-    // Copy FPG if specified
-    if (!project.fpgFile.isEmpty()) {
-        QString fpgPath = project.path + "/" + project.fpgFile;
-        if (QFile::exists(fpgPath)) {
-            QFileInfo fpgInfo(fpgPath);
-            QString destFpgPath = distDir + "/assets/" + fpgInfo.fileName();
-            QFile::remove(destFpgPath);
-            QFile::copy(fpgPath, destFpgPath);
-        }
-    }
+    // FPG handling is now part of general assets copy if present in assets/
+    // Legacy specific FPG copy removed.
     
     // Copy map files
     QDir projectDir(project.path);

@@ -15,8 +15,7 @@ struct ProjectData {
     QString name;
     QString version;
     QString path;
-    QString fpgFile;
-    QString initialMap;
+    QString startupScene; // Name of the scene to launch on start
     QString mainScript = "src/main.prg";  // Main script to compile
     
     // Display settings
@@ -25,16 +24,7 @@ struct ProjectData {
     int renderWidth = 800;   // Internal render resolution
     int renderHeight = 600;  // Internal render resolution
     int fps = 60;
-    int fov = 90;
-    int raycastQuality = 1;
     bool fullscreen = false;  // Fullscreen mode
-    
-    // Camera
-    double cameraX = 0.0;
-    double cameraY = 0.0;
-    double cameraZ = 0.0;
-    double cameraRot = 0.0;
-    double cameraPitch = 0.0;
     
     // Publishing
     QString packageName;  // For Android publishing
@@ -55,8 +45,9 @@ public:
     const Project* getProject() const;
     QString getProjectPath() const;
     
-    // Load project configuration (resolution, etc.)
+    // Load/Save project configuration (resolution, etc.)
     static ProjectData loadProjectData(const QString &projectPath);
+    static bool saveProjectData(const QString &projectPath, const ProjectData &data);
 
 private:
     Project *m_project;

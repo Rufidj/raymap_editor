@@ -3,7 +3,9 @@
 #include <QDir>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QFile>
+#include <QDirIterator>
 #include <QDebug>
 
 ProjectManager::ProjectManager(QObject *parent) : QObject(parent), m_project(nullptr)
@@ -28,9 +30,25 @@ bool ProjectManager::createProject(const QString &path, const QString &name)
     dir.mkpath("assets");
     
     // Generate default main.prg
+    ProjectData defaultData;
+    defaultData.name = name;
+    defaultData.path = path;
+    defaultData.startupScene = "scene1";
+    
+    // Create default scene
+    QJsonObject sceneJson;
+    sceneJson["width"] = 320;
+    sceneJson["height"] = 240;
+    sceneJson["entities"] = QJsonArray(); // Empty for now
+    
+    QFile sceneFile(path + "/scene1.scn");
+    if(sceneFile.open(QIODevice::WriteOnly)) {
+        sceneFile.write(QJsonDocument(sceneJson).toJson());
+        sceneFile.close();
+    }
+    
     CodeGenerator generator;
-    // We can set project info if needed, but for now default template is fine
-    // generator.setProject(m_project); 
+    generator.setProjectData(defaultData);
     
     QString mainCode = generator.generateMainPrg();
     QFile srcFile(path + "/src/main.prg");
@@ -38,6 +56,9 @@ bool ProjectManager::createProject(const QString &path, const QString &name)
         srcFile.write(mainCode.toUtf8());
         srcFile.close();
     }
+    
+    // Generate scene scripts
+    generator.generateAllScenes(path);
     
     // Save project file
     QJsonObject obj;
@@ -114,15 +135,6 @@ ProjectData ProjectManager::loadProjectData(const QString &projectPath)
     data.renderWidth = 800;
     data.renderHeight = 600;
     data.fps = 60;
-    data.fov = 90;
-    data.raycastQuality = 1;
-    data.fpgFile = "assets.fpg";
-    data.initialMap = "map.raymap";
-    data.cameraX = 384.0;
-    data.cameraY = 384.0;
-    data.cameraZ = 0.0;
-    data.cameraRot = 0.0;
-    data.cameraPitch = 0.0;
     
     // Try to load from config file
     QString configPath = projectPath + "/project_config.json";
@@ -139,23 +151,27 @@ ProjectData ProjectManager::loadProjectData(const QString &projectPath)
             // Load all values (with defaults if not present)
             data.name = config.value("name").toString(data.name);
             data.version = config.value("version").toString("1.0");
-            data.fpgFile = config.value("fpgFile").toString(data.fpgFile);
-            data.initialMap = config.value("initialMap").toString(data.initialMap);
+            data.startupScene = config.value("startupScene").toString("");
+            
+            // Fallback: If no startup scene defined, try to find one
+            if (data.startupScene.isEmpty()) {
+                QDirIterator it(projectPath, QStringList() << "*.scn", QDir::Files, QDirIterator::Subdirectories);
+                if (it.hasNext()) {
+                    data.startupScene = QFileInfo(it.next()).baseName();
+                } else {
+                    data.startupScene = "scene1"; // Last resort
+                }
+            }
+            
             data.screenWidth = config.value("screenWidth").toInt(data.screenWidth);
             data.screenHeight = config.value("screenHeight").toInt(data.screenHeight);
             data.renderWidth = config.value("renderWidth").toInt(data.renderWidth);
             data.renderHeight = config.value("renderHeight").toInt(data.renderHeight);
             data.fps = config.value("fps").toInt(data.fps);
-            data.fov = config.value("fov").toInt(data.fov);
-            data.raycastQuality = config.value("raycastQuality").toInt(data.raycastQuality);
+            
             data.fullscreen = config.value("fullscreen").toBool(data.fullscreen);
             data.packageName = config.value("packageName").toString("com.example.game");
             data.androidSupport = config.value("androidSupport").toBool(true);
-            data.cameraX = config.value("cameraX").toDouble(data.cameraX);
-            data.cameraY = config.value("cameraY").toDouble(data.cameraY);
-            data.cameraZ = config.value("cameraZ").toDouble(data.cameraZ);
-            data.cameraRot = config.value("cameraRot").toDouble(data.cameraRot);
-            data.cameraPitch = config.value("cameraPitch").toDouble(data.cameraPitch);
             
             qDebug() << "Loaded project configuration from" << configPath;
         }
@@ -164,4 +180,30 @@ ProjectData ProjectManager::loadProjectData(const QString &projectPath)
     }
     
     return data;
+}
+
+bool ProjectManager::saveProjectData(const QString &projectPath, const ProjectData &data)
+{
+    QJsonObject config;
+    config["name"] = data.name;
+    config["version"] = data.version;
+    config["startupScene"] = data.startupScene;
+    config["screenWidth"] = data.screenWidth;
+    config["screenHeight"] = data.screenHeight;
+    config["renderWidth"] = data.renderWidth;
+    config["renderHeight"] = data.renderHeight;
+    config["fps"] = data.fps;
+    config["fullscreen"] = data.fullscreen;
+    config["packageName"] = data.packageName;
+    config["androidSupport"] = data.androidSupport;
+    
+    QJsonDocument doc(config);
+    QString configPath = projectPath + "/project_config.json";
+    QFile configFile(configPath);
+    if (configFile.open(QIODevice::WriteOnly)) {
+        configFile.write(doc.toJson());
+        configFile.close();
+        return true;
+    }
+    return false;
 }

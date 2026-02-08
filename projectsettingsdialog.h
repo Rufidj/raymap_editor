@@ -3,6 +3,7 @@
 
 #include <QDialog>
 #include <QLineEdit>
+#include <QComboBox>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
@@ -22,12 +23,11 @@ public:
     ProjectData getProjectData() const;
 
 private slots:
-    void onBrowseFPG();
-    void onBrowseMap();
     void onAccept();
 
 private:
     void setupUi();
+    void loadSceneList();
     
     ProjectData m_data; // Working copy
 
@@ -36,27 +36,17 @@ private:
     QLineEdit *m_versionEdit;
     QLineEdit *m_packageEdit; // Android Package Name
     
-    QLineEdit *m_fpgEdit;
-    QPushButton *m_browseFpgBtn;
-    
-    QLineEdit *m_mapEdit;
-    QPushButton *m_browseMapBtn;
+    // Startup
+    QComboBox *m_startupSceneCombo;
     
     QSpinBox *m_widthSpin;
     QSpinBox *m_heightSpin;
-    QSpinBox *m_renderWidthSpin;  // New: Internal render resolution
+    QSpinBox *m_renderWidthSpin;  // New: Internal render resolution (if applicable)
     QSpinBox *m_renderHeightSpin; // New: Internal render resolution
     QSpinBox *m_fpsSpin;
-    QSpinBox *m_fovSpin;
-    QSpinBox *m_qualitySpin; // New
+    
     QCheckBox *m_fullscreenCheck; // New: Fullscreen mode
     QCheckBox *m_androidSupportCheck; // New: Android compatibility
-    
-    QDoubleSpinBox *m_camX;
-    QDoubleSpinBox *m_camY;
-    QDoubleSpinBox *m_camZ;
-    QDoubleSpinBox *m_camRot;
-    QDoubleSpinBox *m_camPitch;
 };
 
 #endif // PROJECTSETTINGSDIALOG_H

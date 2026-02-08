@@ -22,7 +22,7 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
         // Removed GLOBAL block to prevent compiler errors with multiple globals in includes
         // Caching is disabled for file stability
         
-        out << "PROCESS " << processName << "(int spawn_id)\n";
+        out << "process " << processName << "(int spawn_id)\n";
         out << "PRIVATE\n";
         out << "    int model_id = 0;\n";
         out << "    int texture_id = 0;\n";
@@ -30,8 +30,7 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
         out << "    float world_x, world_y, world_z;\n";
         out << "    float rotation = 0.0;\n";
         out << "    float scale = 1.0;\n";
-        out << "END\n";
-        out << "BEGIN\n";
+        out << "begin\n";
         out << "    \n";
         out << "    // Get spawn position from flag\n";
         out << "    world_x = RAY_GET_FLAG_X(spawn_id);\n";
@@ -82,12 +81,12 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
         out << "    \n";
         // out << "    say(\"[" << processName << "] Spawned successfully! sprite_id=\" + sprite_id);\n";
         out << "    \n";
-        out << "    LOOP\n";
+        out << "    loop\n";
         out << "        // Entity logic here\n";
         out << "        // Update position if needed:\n";
         out << "        // RAY_UPDATE_SPRITE_POSITION(sprite_id, world_x, world_y, world_z);\n";
-        out << "        FRAME;\n";
-        out << "    END\n";
+        out << "        frame;\n";
+        out << "    end\n";
         out << "    \n";
         out << "    // Cleanup\n";
         out << "    RAY_CLEAR_FLAG();\n";
@@ -98,15 +97,14 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
         QFileInfo fi(assetPath);
         QString cleanPath = "assets/paths/" + fi.fileName(); 
         
-        out << "PROCESS " << processName << "(int spawn_id)\n";
+        out << "process " << processName << "(int spawn_id)\n";
         out << "PRIVATE\n";
         out << "    string path_file = \"" << cleanPath << "\";\n";
         out << "    int path_id = -1;\n";
         out << "    int p_id;\n";
         out << "    int dist;\n";
         out << "    float pos_x, pos_y, pos_z;\n";
-        out << "END\n";
-        out << "BEGIN\n";
+        out << "begin\n";
         out << "    pos_x = RAY_GET_FLAG_X(spawn_id);\n";
         out << "    pos_y = RAY_GET_FLAG_Y(spawn_id);\n";
         out << "    pos_z = RAY_GET_FLAG_Z(spawn_id);\n";
@@ -115,7 +113,7 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
         out << "    path_id = ray_camera_load(path_file);\n";
         out << "    if (path_id < 0) say(\"Error loading path: \" + path_file); return; end\n";
         out << "    \n";
-        out << "    LOOP\n";
+        out << "    loop\n";
         out << "        p_id = get_id(type player);\n";
         out << "        if (p_id)\n";
         out << "            dist = abs(p_id.x - pos_x) + abs(p_id.y - pos_y);\n";
@@ -125,30 +123,29 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
         out << "                break;\n";
         out << "            end\n";
         out << "        end\n";
-        out << "        FRAME;\n";
-        out << "    END\n";
+        out << "        frame;\n";
+        out << "    end\n";
         out << "    RAY_CLEAR_FLAG();\n";
-        out << "END\n";
+        out << "end\n";
     } else if (type == "sprite") {
-        out << "PROCESS " << processName << "(float world_x, float world_y, float world_z)\n";
+        out << "process " << processName << "(float world_x, float world_y, float world_z)\n";
         out << "PRIVATE\n";
         out << "    int sprite_id;\n";
         out << "    int texture_id = 1;  // TODO: Get from FPG\n";
-        out << "END\n";
-        out << "BEGIN\n";
+        out << "begin\n";
         out << "    // Create sprite\n";
         out << "    sprite_id = RAY_ADD_SPRITE(world_x, world_y, world_z, texture_id, 64, 64);\n";
         out << "    \n";
-        out << "    LOOP\n";
+        out << "    loop\n";
         out << "        // Sprite logic here\n";
         out << "        // Update position if needed:\n";
         out << "        // RAY_UPDATE_SPRITE_POSITION(sprite_id, world_x, world_y, world_z);\n";
-        out << "        FRAME;\n";
-        out << "    END\n";
+        out << "        frame;\n";
+        out << "    end\n";
         out << "    \n";
         out << "    // Cleanup\n";
         out << "    RAY_REMOVE_SPRITE(sprite_id);\n";
-        out << "END\n";
+        out << "end\n";
     }
     
     return code;
@@ -272,7 +269,7 @@ QString ProcessGenerator::generateDeclarationsSection(const QVector<EntityInstan
     
     QStringList uniqueProcesses = getUniqueProcessNames(entities);
     for (const QString &processName : uniqueProcesses) {
-        out << "DECLARE PROCESS " << processName << "(int spawn_id);\n";
+        out << "declare process " << processName << "(int spawn_id)\n";
     }
     
     return declarations;
@@ -291,7 +288,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(const EntityInstance &
     out << "// Asset: " << entity.assetPath << "\n";
     out << "// ========================================\n\n";
     
-    out << "PROCESS " << entity.processName << "(int spawn_id)\n";
+    out << "process " << entity.processName << "(int spawn_id)\n";
     out << "PRIVATE\n";
     
     // Common variables
@@ -327,9 +324,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(const EntityInstance &
         out << "    float dx = 0.0; float dy = 0.0;\n";
     }
 
-    
-    out << "END\n";
-    out << "BEGIN\n";
+    out << "begin\n";
     
     // Get spawn position
     out << "    // Get spawn position from flag\n";
@@ -413,7 +408,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(const EntityInstance &
                 QString customCode = actionCode;
                 out << "    " << customCode.replace("\n", "\n    ") << "\n";
             }
-            out << "    LOOP\n";
+            out << "    loop\n";
             
             if (entity.isPlayer) {
                 out << "        // Movimiento relativo al angulo de la camara\n";
@@ -498,8 +493,8 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(const EntityInstance &
                 }
             }
             
-            out << "        FRAME;\n";
-            out << "    END\n";
+            out << "        frame;\n";
+            out << "    end\n";
             break;
 
 
@@ -508,7 +503,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(const EntityInstance &
             
         case EntityInstance::ACTIVATION_ON_COLLISION:
             out << "    // Activate on collision\n";
-            out << "    LOOP\n";
+            out << "    loop\n";
             out << "        if (collision(collision_target) && !collision_detected)\n";
             out << "            collision_detected = 1;\n";
             if (!actionCode.isEmpty()) {
@@ -517,30 +512,30 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(const EntityInstance &
                 out << "            say(\"[" << entity.processName << "] Collision detected!\");\n";
             }
             out << "        end\n";
-            out << "        FRAME;\n";
-            out << "    END\n";
+            out << "        frame;\n";
+            out << "    end\n";
             break;
             
         case EntityInstance::ACTIVATION_ON_TRIGGER:
             out << "    // Activate on trigger (area detection)\n";
-            out << "    LOOP\n";
+            out << "    loop\n";
             out << "        // TODO: Implement area trigger detection\n";
             out << "        // Check if player is within range\n";
-            out << "        FRAME;\n";
-            out << "    END\n";
+            out << "        frame;\n";
+            out << "    end\n";
             break;
             
         case EntityInstance::ACTIVATION_ON_EVENT:
             out << "    // Activate on event: " << entity.eventName << "\n";
-            out << "    LOOP\n";
+            out << "    loop\n";
             out << "        if (event_triggered)\n";
             if (!actionCode.isEmpty()) {
                 out << "            " << actionCode.replace("\n", "\n            ") << "\n";
             }
             out << "            break;\n";
             out << "        end\n";
-            out << "        FRAME;\n";
-            out << "    END\n";
+            out << "        frame;\n";
+            out << "    end\n";
             break;
             
         case EntityInstance::ACTIVATION_MANUAL:
@@ -548,10 +543,10 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(const EntityInstance &
             if (!actionCode.isEmpty()) {
                 out << "    " << actionCode.replace("\n", "\n    ") << "\n";
             }
-            out << "    LOOP\n";
+            out << "    loop\n";
             out << "        // Custom logic here\n";
-            out << "        FRAME;\n";
-            out << "    END\n";
+            out << "        frame;\n";
+            out << "    end\n";
             break;
     }
     
@@ -562,7 +557,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(const EntityInstance &
     if (entity.type == "model") {
         out << "    RAY_REMOVE_SPRITE(sprite_id);\n";
     }
-    out << "END\n\n";
+    out << "end\n\n";
     
     return code;
 }

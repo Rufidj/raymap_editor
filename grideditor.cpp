@@ -13,6 +13,7 @@
 #include <QMenu>
 #include <QContextMenuEvent>
 #include <QDragEnterEvent>
+#include <QDebug>
 #include <QDropEvent>
 #include <QMimeData>
 #include <QUrl>
@@ -417,6 +418,12 @@ float GridEditor::pointToLineDistance(const QPointF &point, const QPointF &lineS
 
 void GridEditor::paintEvent(QPaintEvent *event)
 {
+    static bool firstPaint = true;
+    if (firstPaint) {
+        qDebug() << "GridEditor first paintEvent started...";
+        firstPaint = false;
+    }
+    
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     
@@ -1374,7 +1381,7 @@ void GridEditor::dropEvent(QDropEvent *event)
         
         if (ext == "md3") {
             // Calculate drop position in world coordinates
-            QPointF dropPos = screenToWorld(event->position().toPoint());
+            QPointF dropPos = screenToWorld(event->pos());
             
             // Create Entity Instance
             EntityInstance entity;
@@ -1398,7 +1405,7 @@ void GridEditor::dropEvent(QDropEvent *event)
             event->acceptProposedAction();
         } else if (ext == "campath") {
             // Camera Path Trigger
-            QPointF dropPos = screenToWorld(event->position().toPoint());
+            QPointF dropPos = screenToWorld(event->pos());
             
             EntityInstance entity;
             entity.assetPath = filePath;

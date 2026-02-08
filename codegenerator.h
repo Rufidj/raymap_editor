@@ -6,6 +6,7 @@
 #include <QVector>
 #include "projectmanager.h"
 #include "mapdata.h"
+struct SceneData;
 
 class CodeGenerator
 {
@@ -34,6 +35,12 @@ public:
     // Camera System
     QString generateCameraController(); // Generates includes/camera_controller.h
     QString generateCameraPathData(const QString &pathName, const struct CameraPath &path);
+
+    // 2D Scene System
+    QString generateScenePrg(const QString &sceneName, const SceneData &data, const QString &existingCode = QString());
+    void generateAllScenes(const QString &projectPath); // Scan and generate all .scn code
+    bool patchMainIncludeScenes(const QString &projectPath);
+    bool setStartupScene(const QString &projectPath, const QString &sceneName);
 
 private:
     ProjectData m_projectData;

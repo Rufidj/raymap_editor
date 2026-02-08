@@ -51,7 +51,6 @@ AssetBrowser::AssetBrowser(QWidget *parent)
             this, &AssetBrowser::onItemDoubleClicked);
     connect(m_treeWidget, &QTreeWidget::customContextMenuRequested,
             this, &AssetBrowser::onContextMenu);
-    connect(m_treeWidget, &QTreeWidget::itemClicked, this, &AssetBrowser::onItemClicked);
     connect(m_watcher, &QFileSystemWatcher::directoryChanged,
             this, &AssetBrowser::onDirectoryChanged);
     
@@ -145,7 +144,8 @@ void AssetBrowser::populateTree()
         if (dir.exists()) {
             QTreeWidgetItem *folderItem = new QTreeWidgetItem(m_treeWidget);
             folderItem->setText(0, folder);
-            folderItem->setIcon(0, QIcon::fromTheme("folder"));
+            // Use standard directory icon
+            folderItem->setIcon(0, QApplication::style()->standardIcon(QStyle::SP_DirIcon));
             folderItem->setData(0, Qt::UserRole, folderPath);
             
             addDirectoryItems(folderItem, folderPath);
@@ -163,7 +163,7 @@ void AssetBrowser::addDirectoryItems(QTreeWidgetItem *parent, const QString &pat
     for (const QFileInfo &dirInfo : dirs) {
         QTreeWidgetItem *dirItem = new QTreeWidgetItem(parent);
         dirItem->setText(0, dirInfo.fileName());
-        dirItem->setIcon(0, QIcon::fromTheme("folder"));
+        dirItem->setIcon(0, QApplication::style()->standardIcon(QStyle::SP_DirIcon));
         dirItem->setData(0, Qt::UserRole, dirInfo.absoluteFilePath());
         
         addDirectoryItems(dirItem, dirInfo.absoluteFilePath());
@@ -184,6 +184,10 @@ void AssetBrowser::addDirectoryItems(QTreeWidgetItem *parent, const QString &pat
         allowedExtensions << "png" << "jpg" << "bmp" << "fpg" << "map";
     } else if (dirName == "src" || dirName == "includes") {
         allowedExtensions << "prg" << "h" << "c";
+    } else if (dirName == "scenes" || dirName == "maps") {
+        allowedExtensions << "map" << "raymap" << "scn" << "2d";
+    } else if (dirName == "sound" || dirName == "sounds" || dirName == "audio" || dirName == "music") {
+        allowedExtensions << "wav" << "ogg" << "mp3" << "mid" << "mod" << "flac" << "opus";
     } else {
         // No filter for other directories - show all files
         allowedExtensions.clear();
@@ -208,22 +212,24 @@ void AssetBrowser::addDirectoryItems(QTreeWidgetItem *parent, const QString &pat
 QIcon AssetBrowser::getIconForFile(const QString &fileName)
 {
     if (fileName.endsWith(".prg")) {
-        return QIcon::fromTheme("text-x-script");
-    } else if (fileName.endsWith(".raymap")) {
-        return QIcon::fromTheme("map");
+        return QApplication::style()->standardIcon(QStyle::SP_FileIcon); // Script
+    } else if (fileName.endsWith(".raymap") || fileName.endsWith(".map")) {
+        return QApplication::style()->standardIcon(QStyle::SP_FileIcon); // Map
+    } else if (fileName.endsWith(".scn") || fileName.endsWith(".2d")) {
+        return QApplication::style()->standardIcon(QStyle::SP_FileIcon); // Scene
     } else if (fileName.endsWith(".md3")) {
-        return QIcon::fromTheme("applications-graphics");
+        return QApplication::style()->standardIcon(QStyle::SP_FileIcon); // 3D
     } else if (fileName.endsWith(".fpg")) {
-        return QIcon::fromTheme("image-x-generic");
+        return QApplication::style()->standardIcon(QStyle::SP_FileIcon); // Image pack
     } else if (fileName.endsWith(".png") || fileName.endsWith(".jpg")) {
-        return QIcon::fromTheme("image-x-generic");
-    } else if (fileName.endsWith(".wav") || fileName.endsWith(".ogg")) {
-        return QIcon::fromTheme("audio-x-generic");
-    } else if (fileName.endsWith(".eff")) {
-        return QIcon::fromTheme("preferences-desktop-effects");
-    }
+        return QApplication::style()->standardIcon(QStyle::SP_FileIcon); // Image
+    } else if (fileName.endsWith(".wav") || fileName.endsWith(".ogg") || fileName.endsWith(".mp3") || 
+               fileName.endsWith(".mid") || fileName.endsWith(".mod") || fileName.endsWith(".flac") || 
+               fileName.endsWith(".opus")) {
+         return QApplication::style()->standardIcon(QStyle::SP_MediaVolume); // Audio
+    } 
     
-    return QIcon::fromTheme("text-x-generic");
+    return QApplication::style()->standardIcon(QStyle::SP_FileIcon);
 }
 
 void AssetBrowser::onItemClicked(QTreeWidgetItem *item, int column)
@@ -296,6 +302,30 @@ void AssetBrowser::onContextMenu(const QPoint &pos)
         menu.addSeparator();
     }
     
+    // Option to delete .scn or .prg files
+    if (info.isFile() && (info.suffix().toLower() == "scn" || info.suffix().toLower() == "prg")) {
+        QAction *deleteFileAction = menu.addAction(QIcon::fromTheme("edit-delete"), 
+            info.suffix().toLower() == "scn" ? "Eliminar Escena" : "Eliminar Código");
+        connect(deleteFileAction, &QAction::triggered, this, [this, path, info]() {
+            QString fileType = info.suffix().toLower() == "scn" ? "escena" : "código";
+            QMessageBox::StandardButton reply = QMessageBox::question(this, 
+                "Confirmar Eliminación",
+                QString("¿Estás seguro de que quieres eliminar esta %1?\n\n%2\n\nEsta acción no se puede deshacer.")
+                    .arg(fileType).arg(info.fileName()),
+                QMessageBox::Yes | QMessageBox::No);
+            
+            if (reply == QMessageBox::Yes) {
+                if (QFile::remove(path)) {
+                    QMessageBox::information(this, "Éxito", QString("La %1 ha sido eliminada.").arg(fileType));
+                    refresh(); // Refresh tree
+                } else {
+                    QMessageBox::critical(this, "Error", QString("No se pudo eliminar la %1.").arg(fileType));
+                }
+            }
+        });
+        menu.addSeparator();
+    }
+    
     // Folder operations
     if (info.isDir()) {
         // Don't allow renaming src folder
@@ -315,6 +345,9 @@ void AssetBrowser::onContextMenu(const QPoint &pos)
     
     QAction *newCodeAction = menu.addAction(QIcon::fromTheme("text-x-script"), "Nuevo Código (.prg)...");
     connect(newCodeAction, &QAction::triggered, this, &AssetBrowser::onNewCode);
+
+    QAction *newSceneAction = menu.addAction(QIcon::fromTheme("application-x-executable"), "Nueva Escena 2D (.scn)...");
+    connect(newSceneAction, &QAction::triggered, this, &AssetBrowser::onNewScene);
     
     // Don't allow deleting src, assets, or build folders (only for directories)
     if (info.isDir() && !path.endsWith("/src") && !path.endsWith("/assets") && !path.endsWith("/build")) {
@@ -483,18 +516,58 @@ void AssetBrowser::onNewCode()
         QTextStream out(&file);
         out << "// " << fileName << "\n";
         out << "// Auto-generado por RayMap Editor\n\n";
-        out << "PROCESS mi_proceso()\n";
-        out << "BEGIN\n";
+        out << "process mi_proceso()\n";
+        out << "begin\n";
         out << "    LOOP\n";
         out << "        // Tu código aquí\n";
         out << "        FRAME;\n";
         out << "    END\n";
-        out << "END\n";
+        out << "end\n";
         file.close();
         
         refresh();
         QMessageBox::information(this, "Éxito", 
             QString("Archivo '%1' creado exitosamente").arg(fileName));
+    } else {
+        QMessageBox::warning(this, "Error", "No se pudo crear el archivo.");
+    }
+}
+
+void AssetBrowser::onNewScene()
+{
+    if (m_selectedPath.isEmpty()) return;
+    
+    bool ok;
+    QString fileName = QInputDialog::getText(this, "Nueva Escena 2D",
+        "Nombre de la escena (sin extensión):", QLineEdit::Normal, "nueva_escena", &ok);
+    
+    if (!ok || fileName.isEmpty()) return;
+    
+    if (!fileName.endsWith(".scn")) {
+        fileName += ".scn";
+    }
+    
+    QString filePath = m_selectedPath + "/" + fileName;
+    
+    if (QFile::exists(filePath)) {
+        QMessageBox::warning(this, "Error", "El archivo ya existe.");
+        return;
+    }
+    
+    QFile file(filePath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream out(&file);
+        out << "{\n";
+        out << "    \"type\": \"scene2d\",\n";
+        out << "    \"version\": 1,\n";
+        out << "    \"background\": null,\n";
+        out << "    \"entities\": []\n";
+        out << "}\n";
+        file.close();
+        
+        refresh();
+        QMessageBox::information(this, "Éxito", 
+            QString("Escena '%1' creada exitosamente").arg(fileName));
     } else {
         QMessageBox::warning(this, "Error", "No se pudo crear el archivo.");
     }

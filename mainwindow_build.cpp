@@ -21,6 +21,7 @@ void MainWindow::setupBuildSystem()
     // Create Console Widget
     m_consoleWidget = new ConsoleWidget(this);
     m_consoleDock = new QDockWidget(tr("Consola / Salida"), this);
+    m_consoleDock->setObjectName("ConsoleDock");
     m_consoleDock->setWidget(m_consoleWidget);
     addDockWidget(Qt::BottomDockWidgetArea, m_consoleDock);
     m_consoleDock->show();  // Show by default for debugging
@@ -277,6 +278,27 @@ void MainWindow::onGenerateCode()
     QString mainPath = m_projectManager->getProjectPath() + "/src/main.prg";
     bool fileExists = QFile::exists(mainPath);
     
+    // Check if we are in "Scene" mode (2D UI/Scenes)
+    bool isScene = mapPath.endsWith(".scn", Qt::CaseInsensitive);
+
+    if (isScene) {
+        // SCENE MODE: Use the scene-based generation we've been refining
+        generator.generateAllScenes(m_projectManager->getProjectPath());
+        
+        QFileInfo sceneInfo(mapPath);
+        QString sceneName = sceneInfo.baseName();
+        
+        // Ensure main.prg is set up for scenes
+        generator.setStartupScene(m_projectManager->getProjectPath(), sceneName);
+        
+        if (m_consoleWidget) {
+            m_consoleWidget->sendText("Scene-based code generated successfully!\n");
+            m_consoleWidget->sendText("  Startup Scene: " + sceneName + "\n");
+        }
+        return; // Skip the rest of the 3D-specific generation
+    }
+
+    // 3D MODE: Standard Raycasting Map generation
     if (fileExists) {
         // Read existing code to patch it
         QFile existingFile(mainPath);

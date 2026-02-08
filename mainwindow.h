@@ -27,6 +27,7 @@
 class BuildManager;
 #include "projectmanager.h"
 class AssetBrowser;
+class SceneEditor; // Framework for 2D Scenes
 
 class MainWindow : public QMainWindow
 {
@@ -148,6 +149,7 @@ private slots:
     void onEditEntityBehavior(int index, const EntityInstance &entity); // NEW: Edit entity behavior
     
     void updateSectorList();  // Refresh the sector tree
+    void updateSceneEntityTree(SceneEditor *editor); // NEW
     void onSectorTreeContextMenu(const QPoint &pos); // Context menu slot
     
     // Sector operations
@@ -205,7 +207,7 @@ private:
     QDockWidget *m_codePreviewDock;
     
     // Code Editor Window
-    // CodeEditorDialog *m_codeEditorDialog; // Removed to allow multiple windows
+    CodeEditorDialog *m_codeEditorDialog;
     
     // Build System
     BuildManager *m_buildManager;
@@ -227,6 +229,8 @@ private:
     QDockWidget *m_sectorDock;
     QDockWidget *m_wallDock;
     QDockWidget *m_sectorListDock;  // NEW: List of all sectors
+    QDockWidget *m_sceneEntitiesDock = nullptr;
+    QTreeWidget *m_sceneEntitiesTree = nullptr;
     
     // Sector tree (hierarchical with groups)
     QTreeWidget *m_sectorTree;  // NEW: Hierarchical sector tree
@@ -348,6 +352,11 @@ private:
     void updateDecalPanel();
     void regenerateEntityScripts(const ProjectData *data = nullptr);
     void openProject(const QString &path);
+    void onOpenScene(const QString &path);
+    
+    // Slot that responds to SceneEditor::startupSceneRequested and sceneSaved
+    void onStartupSceneRequested(const QString &sceneName);
+    void onSceneSaved(const QString &scenePath);
 };
 
 #endif // MAINWINDOW_H

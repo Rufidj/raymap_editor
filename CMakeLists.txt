@@ -49,6 +49,8 @@ set(PROJECT_SOURCES
     bennugdinstaller.h bennugdinstaller.cpp
     codegenerator.h codegenerator.cpp
     processgenerator.h processgenerator.cpp
+    fpgeditor.h fpgeditor.cpp
+    sceneeditor.h sceneeditor.cpp
     projectmanager.h projectmanager.cpp
     codepreviewpanel.h codepreviewpanel.cpp
     codeeditor.h codeeditor.cpp
@@ -62,6 +64,7 @@ set(PROJECT_SOURCES
     publisher.h publisher.cpp
     downloader.h downloader.cpp
     fonteditordialog.h fonteditordialog.cpp
+    bennurenderer.h bennurenderer.cpp
     resources.qrc
 )
 
@@ -77,7 +80,6 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
         fpgloader.h fpgloader.cpp
-        fpgeditor.h fpgeditor.cpp
         effectgenerator.h effectgenerator.cpp
         effectgeneratordialog.h effectgeneratordialog.cpp
         camerakeyframe.h
@@ -107,7 +109,6 @@ else()
     add_executable(raymap_editor
         ${PROJECT_SOURCES}
         fpgloader.h fpgloader.cpp
-        fpgeditor.h fpgeditor.cpp
         effectgenerator.h effectgenerator.cpp
         effectgeneratordialog.h effectgeneratordialog.cpp
         camerakeyframe.h

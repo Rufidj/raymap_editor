@@ -10,7 +10,7 @@
 void MainWindow::onToggleDarkMode(bool checked)
 {
     if (checked) {
-        qApp->setStyle(QStyleFactory::create("Fusion"));
+        // qApp->setStyle(QStyleFactory::create("Fusion")); // Already set in main.cpp
 
         QPalette p;
         p.setColor(QPalette::Window, QColor(53, 53, 53));
@@ -34,7 +34,7 @@ void MainWindow::onToggleDarkMode(bool checked)
 
         qApp->setPalette(p);
     } else {
-        qApp->setStyle(QStyleFactory::create("Fusion"));
+        // qApp->setStyle(QStyleFactory::create("Fusion")); 
         qApp->setPalette(style()->standardPalette());
     }
 }
@@ -43,9 +43,14 @@ void MainWindow::loadSettings()
 {
     QSettings settings("BennuGD", "RayMapEditor");
     
-    // Window geometry
-    restoreGeometry(settings.value("geometry").toByteArray());
-    restoreState(settings.value("windowState").toByteArray());
+    // Window geometry (using v2 to avoid crashes from old corrupt state)
+    // restoreGeometry(settings.value("geometry_v2").toByteArray());
+    // restoreState(settings.value("windowState_v2").toByteArray()); // DISABLED PERMANENTLY: Causes crashes on Linux
+    
+    // Force asset dock to left after restoration
+    if (m_assetDock) {
+        addDockWidget(Qt::LeftDockWidgetArea, m_assetDock);
+    }
     
     // Dark Mode
     bool darkMode = settings.value("darkMode", true).toBool(); // Default to Dark Mode
@@ -79,14 +84,13 @@ void MainWindow::saveSettings()
 {
     QSettings settings("BennuGD", "RayMapEditor");
     
-    // Window geometry
-    settings.setValue("geometry", saveGeometry());
-    settings.setValue("windowState", saveState());
+    // Window geometry (using v2)
+    // settings.setValue("geometry_v2", saveGeometry());
+    // settings.setValue("windowState_v2", saveState()); // DISABLED PERMANENTLY: Causes crashes on Linux
     
-    // Dark Mode
-    // We check the palette to know if we are in dark mode, or store a member variable.
-    // Simpler: Just check if Window color is dark.
-    bool specificDarkMode = (qApp->palette().color(QPalette::Window).lightness() < 128);
+    // Check if we are in dark mode (Fusion dark palette)
+    // We can assume if window color is dark, mode is dark.
+    bool specificDarkMode = (palette().color(QPalette::Window).lightness() < 128);
     settings.setValue("darkMode", specificDarkMode);
     
     // Last Open Project

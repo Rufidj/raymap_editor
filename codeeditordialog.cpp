@@ -1,6 +1,7 @@
 #include "codeeditordialog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QDebug>
 #include <QPushButton>
 #include <QLabel>
 #include <QFileDialog>

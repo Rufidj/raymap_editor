@@ -11,9 +11,10 @@ class BuildManager : public QObject
 public:
     explicit BuildManager(QObject *parent = nullptr);
     
-    void buildProject(const QString &projectPath);
-    void runProject(const QString &projectPath);
+    void buildProject(const QString &projectPath, const QString &mainFile = "main.prg");
+    void runProject(const QString &projectPath, const QString &dcbFile = "main.dcb");
     void buildAndRunProject(const QString &projectPath);
+    void runScene(const QString &projectPath, const QString &sceneName);
     void stopRunning();
     
     bool isBennuGD2Installed();
@@ -39,6 +40,7 @@ private:
     bool m_isrunning;
     bool m_autoRunAfterBuild;
     QString m_currentProjectPath;
+    QString m_targetDcbName;
 };
 
 #endif // BUILDMANAGER_H

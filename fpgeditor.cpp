@@ -45,6 +45,10 @@ void FPGEditor::setupUI()
     m_textureList->setIconSize(QSize(64, 64));
     m_textureList->setViewMode(QListWidget::ListMode);
     m_textureList->setSelectionMode(QAbstractItemView::ExtendedSelection);  // Multi-selection
+    // Drag & Drop Support
+    m_textureList->setDragEnabled(false); // We handle manually
+    m_textureList->viewport()->installEventFilter(this);
+    
     connect(m_textureList, &QListWidget::itemClicked, this, &FPGEditor::onTextureSelected);
     connect(m_textureList, &QListWidget::itemSelectionChanged, this, &FPGEditor::onSelectionChanged);
     leftLayout->addWidget(m_textureList);
@@ -705,4 +709,47 @@ void FPGEditor::closeEvent(QCloseEvent *event)
     setWindowTitle(tr("Editor de FPG"));
     
     event->accept();
+}
+
+// Drag & Drop
+#include <QMouseEvent>
+#include <QDrag>
+#include <QMimeData>
+#include <QApplication>
+
+bool FPGEditor::eventFilter(QObject *obj, QEvent *event)
+{
+    if (m_textureList && obj == m_textureList->viewport()) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                m_dragStartPos = mouseEvent->pos();
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+            if (mouseEvent->buttons() & Qt::LeftButton) {
+                if ((mouseEvent->pos() - m_dragStartPos).manhattanLength() >= QApplication::startDragDistance()) {
+                    
+                    QListWidgetItem *item = m_textureList->itemAt(m_dragStartPos);
+                    if (item) {
+                        int id = item->data(Qt::UserRole).toInt();
+                        if (id > 0 && !m_fpgPath.isEmpty()) {
+                            QDrag *drag = new QDrag(this);
+                            QMimeData *mimeData = new QMimeData();
+                            
+                            QByteArray data = (m_fpgPath + "|" + QString::number(id)).toUtf8();
+                            mimeData->setData("application/x-raymap-sprite", data);
+                            
+                            drag->setMimeData(mimeData);
+                            drag->setPixmap(item->icon().pixmap(32, 32));
+                            
+                            drag->exec(Qt::CopyAction);
+                            return true; // Event consumed
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return QDialog::eventFilter(obj, event);
 }

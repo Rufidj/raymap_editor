@@ -212,6 +212,10 @@ void MainWindow::regenerateEntityScripts(const ProjectData *customData)
     
     generator.setProjectData(data);
     
+    // Generate 2D Scenes
+    generator.generateAllScenes(data.path);
+    generator.patchMainIncludeScenes(data.path);
+    
     GridEditor* editor = getCurrentEditor();
     if (!editor) return;
     MapData* mapData = editor->mapData();
@@ -323,4 +327,33 @@ void MainWindow::openProject(const QString &path)
         QMessageBox::warning(this, "Error",
             "No se pudo abrir el proyecto: " + path);
     }
+}
+
+void MainWindow::onStartupSceneRequested(const QString &sceneName)
+{
+    if (!m_projectManager || !m_projectManager->hasProject()) {
+        QMessageBox::warning(this, "Error", "No hay proyecto abierto.");
+        return;
+    }
+
+    ProjectData data = m_projectManager->loadProjectData(m_projectManager->getProjectPath());
+    data.startupScene = sceneName;
+    
+    CodeGenerator generator;
+    generator.setProjectData(data); 
+
+    ProjectManager::saveProjectData(m_projectManager->getProjectPath(), data);
+
+    if (generator.setStartupScene(m_projectManager->getProjectPath(), sceneName)) {
+        QMessageBox::information(this, "Escena Inicial", 
+            "Se ha configurado '" + sceneName + "' como escena inicial en el proyecto.");
+    } else {
+        QMessageBox::warning(this, "Error", "No se pudo actualizar main.prg.");
+    }
+}
+
+void MainWindow::onSceneSaved(const QString &scenePath)
+{
+    // Regenerate scripts when a scene is saved to ensure .prg is up to date
+    regenerateEntityScripts();
 }

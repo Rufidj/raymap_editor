@@ -1,5 +1,6 @@
 #include "camerapathio.h"
 #include <QFile>
+#include <QDataStream>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>

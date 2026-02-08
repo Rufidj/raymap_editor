@@ -34,6 +34,7 @@ private slots:
     void onDeleteFolder();
     void onAddFile();
     void onNewCode();
+    void onNewScene();
     
 private:
     void populateTree();

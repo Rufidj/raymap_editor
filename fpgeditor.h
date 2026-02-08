@@ -33,6 +33,7 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private slots:
     void onAddTexture();
@@ -60,6 +61,8 @@ private:
     QMap<int, QPixmap> m_textureMap;
     int m_selectedTextureId;
     bool m_isModified;
+    
+    QPoint m_dragStartPos; // NEW
     
     // Animation
     QTimer *m_animationTimer;

@@ -79,7 +79,7 @@ MeshGeneratorDialog::MeshGeneratorDialog(QWidget *parent)
     formLayout->addRow(m_railingsLabel, m_railingsCheck);
     m_railingsLabel->setVisible(false);
     m_railingsCheck->setVisible(false);
-    connect(m_railingsCheck, &QCheckBox::checkStateChanged, this, &MeshGeneratorDialog::updatePreview);
+    connect(m_railingsCheck, &QCheckBox::stateChanged, this, &MeshGeneratorDialog::updatePreview);
     
     // Arch underneath (for Bridge)
     m_archCheck = new QCheckBox(tr("Con arco por debajo"), this);
@@ -88,7 +88,7 @@ MeshGeneratorDialog::MeshGeneratorDialog(QWidget *parent)
     formLayout->addRow(m_archLabel, m_archCheck);
     m_archLabel->setVisible(false);
     m_archCheck->setVisible(false);
-    connect(m_archCheck, &QCheckBox::checkStateChanged, this, &MeshGeneratorDialog::updatePreview);
+    connect(m_archCheck, &QCheckBox::stateChanged, this, &MeshGeneratorDialog::updatePreview);
     
     // Roof type (for House)
     m_roofTypeCombo = new QComboBox(this);

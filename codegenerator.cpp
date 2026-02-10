@@ -4,9 +4,14 @@
 #include <QDebug>
 #include <QDir>
 #include <QDirIterator>
+#include <QFile>
+#include <QFileInfo>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPainter>
+#include <QPixmap>
 #include <QSet>
 #include <QTextStream>
 
@@ -126,9 +131,8 @@ QString CodeGenerator::getMainTemplate() {
                  "import \"libmod_misc\";\n"
                  "import \"libmod_ray\";\n"
                  "import \"libmod_sound\";\n"
-                 "include \"includes/scene_commons.prg\";\n"
-                 "include \"includes/resources.prg\";\n"
-                 "include \"includes/scenes_list.prg\";\n"
+                 "\n"
+                 "\n"
                  "\n"
                  "\n"
                  "// Constantes de entidad\n"
@@ -138,6 +142,9 @@ QString CodeGenerator::getMainTemplate() {
                  "    TYPE_ENEMY  = 2;\n"
                  "    TYPE_OBJECT = 3;\n"
                  "    TYPE_TRIGGER = 4;\n"
+                 "    \n"
+                 "    // Debug\n"
+                 "    DEBUG_HITBOXES = 0; // Set to 1 to see click areas\n"
                  "end\n"
                  "// [[ED_CONSTANTS_END]]\n"
                  "\n"
@@ -401,15 +408,10 @@ QString CodeGenerator::generateCameraPathData(const QString &pathName,
   // Implementation needed if generating .h files for paths
   return "";
 }
+
 QString CodeGenerator::patchMainPrg(const QString &existingCode,
                                     const QVector<EntityInstance> &entities) {
   QString newFullCode = generateMainPrgWithEntities(entities);
-
-  // If the existing file doesn't have any markers, it's safer to return the
-  // existing code to prevent overwriting manual changes.
-  if (!existingCode.contains("// [[ED_CONSTANTS_START]]")) {
-    return existingCode;
-  }
 
   QString result = existingCode;
   auto replaceBlock = [&](const QString &startMarker, const QString &endMarker,
@@ -424,12 +426,10 @@ QString CodeGenerator::patchMainPrg(const QString &existingCode,
     int oldStart = result.indexOf(startMarker);
     int oldEND = result.indexOf(endMarker);
     if (oldStart != -1 && oldEND != -1) {
-      // Protect user's manual code
       if (protectIfHasContent) {
         int contentStart = oldStart + startMarker.length();
         QString existingContent =
             result.mid(contentStart, oldEND - contentStart).trimmed();
-        // If there's ANY meaningful content, don't touch it
         if (existingContent.length() > 10) {
           return; // Skip - user has code here
         }
@@ -453,14 +453,12 @@ QString CodeGenerator::patchMainPrg(const QString &existingCode,
   // scene_commons.prg)
   int funcPos = result.indexOf("function string get_asset_path");
   if (funcPos != -1) {
-    // Find the second "end" (one for 'if', one for 'function')
     int firstEnd = result.indexOf("end", funcPos);
     if (firstEnd != -1) {
       int secondEnd = result.indexOf("end", firstEnd + 3);
       if (secondEnd != -1) {
         result.remove(funcPos, (secondEnd + 3) - funcPos);
       } else {
-        // Fallback: just remove the line/block start if we can't find clear end
         int nextBegin = result.indexOf("begin", funcPos);
         if (nextBegin != -1)
           result.remove(funcPos, nextBegin - funcPos);
@@ -489,8 +487,6 @@ QString CodeGenerator::patchMainPrg(const QString &existingCode,
       }
     }
   } else if (!result.contains("soundsys_init")) {
-    // If it has resources but not sound init, insert sound init before
-    // resources
     int resPos = result.indexOf("load_project_resources");
     if (resPos != -1) {
       result.insert(resPos,
@@ -509,53 +505,105 @@ QString CodeGenerator::patchMainPrg(const QString &existingCode,
     }
   }
 
-  // Ensure include commons, resources and scenes_list are present
-  if (!result.contains("includes/scene_commons.prg")) {
-    int pos = result.indexOf("include \"includes/resources.prg\";");
-    if (pos == -1)
-      pos = result.indexOf("include \"includes/scenes_list.prg\";");
+  // AGGRESSIVE FIX: Clean injection logic
+  QString monolithicBlock;
+  monolithicBlock += "// [[INLINED_CODE_START]]\n";
+  if (!m_inlineCommons.isEmpty())
+    monolithicBlock += m_inlineCommons + "\n";
+  if (!m_inlineResources.isEmpty())
+    monolithicBlock += m_inlineResources + "\n";
+  if (!m_inlineScenes.isEmpty())
+    monolithicBlock += m_inlineScenes + "\n";
+  monolithicBlock += "// [[INLINED_CODE_END]]\n";
 
-    if (pos != -1) {
-      result.insert(pos, "include \"includes/scene_commons.prg\";\n");
+  QString cleanCode;
+  QStringList originalLines = result.split('\n');
+  bool skipping = false;
+  bool inlinedFound = false;
+
+  // 1. Keep imports and non-inlined code
+  for (const QString &line : originalLines) {
+    QString trimmed = line.trimmed();
+    if (trimmed == "// [[INLINED_CODE_START]]") {
+      skipping = true;
+      if (!inlinedFound) {
+        cleanCode += monolithicBlock;
+        inlinedFound = true;
+      }
+      continue;
+    }
+    if (trimmed == "// [[INLINED_CODE_END]]") {
+      skipping = false;
+      continue;
+    }
+    if (skipping)
+      continue;
+
+    // Check for legacy includes we want to remove
+    if (trimmed.startsWith("include \"includes/"))
+      continue;
+
+    // Avoid double-empty lines
+    if (trimmed.isEmpty() && cleanCode.endsWith("\n\n"))
+      continue;
+
+    cleanCode += line + "\n";
+  }
+
+  // 2. If no inlined block was found, insert it after imports or at top
+  if (!inlinedFound) {
+    int lastImport = cleanCode.lastIndexOf("import \"");
+    if (lastImport != -1) {
+      int endOfLine = cleanCode.indexOf("\n", lastImport);
+      cleanCode.insert(endOfLine + 1, "\n" + monolithicBlock + "\n");
     } else {
-      int lastImport = result.lastIndexOf("import \"");
-      if (lastImport != -1) {
-        int endImport = result.indexOf(";", lastImport);
-        if (endImport != -1)
-          result.insert(endImport + 1,
-                        "\ninclude \"includes/scene_commons.prg\";\n");
+      cleanCode.prepend(monolithicBlock + "\n");
+    }
+  }
+
+  // 3. Ensure essential imports are present
+  QStringList essentialImports = {"libmod_gfx", "libmod_input", "libmod_misc",
+                                  "libmod_ray", "libmod_sound"};
+  for (const QString &imp : essentialImports) {
+    if (!cleanCode.contains("import \"" + imp + "\"")) {
+      cleanCode.prepend("import \"" + imp + "\";\n");
+    }
+  }
+
+  // 4. Ensure essential audio/resource calls in main()
+  if (!cleanCode.contains("load_project_resources")) {
+    int mainStart = cleanCode.indexOf("process main()");
+    if (mainStart != -1) {
+      int beginPos = cleanCode.indexOf("begin", mainStart);
+      if (beginPos != -1) {
+        cleanCode.insert(cleanCode.indexOf("\n", beginPos) + 1,
+                         "    load_project_resources();\n");
       }
     }
   }
 
-  if (!result.contains("includes/resources.prg")) {
-    int pos = result.indexOf("include \"includes/scenes_list.prg\";");
-    if (pos != -1) {
-      result.insert(pos, "include \"includes/resources.prg\";\n");
-    } else {
-      int lastInc =
-          result.lastIndexOf("include \"includes/scene_commons.prg\";");
-      if (lastInc != -1) {
-        int endInc = result.indexOf(";", lastInc);
-        if (endInc != -1)
-          result.insert(endInc + 1, "\ninclude \"includes/resources.prg\";\n");
-      }
-    }
+  // 5. Final Safety Check: Ensure process main() exists
+  if (!cleanCode.contains("process main()")) {
+    cleanCode += "\n// Safety Fallback: Main Process\n";
+    cleanCode += "process main()\n";
+    cleanCode += "begin\n";
+    cleanCode += "    load_project_resources();\n";
+    cleanCode += "    // [[ED_STARTUP_SCENE_START]]\n";
+    QString startScene = m_variables.value("STARTUP_SCENE");
+    if (!startScene.isEmpty() && !startScene.contains("//"))
+      cleanCode += "    " + startScene + "();\n";
+    else
+      cleanCode +=
+          "    if (exists(type scene1)) scene1(); end\n"; // Intelligent try
+    cleanCode += "    // [[ED_STARTUP_SCENE_END]]\n";
+    cleanCode += "    loop\n";
+    cleanCode += "        if (key(_esc)) exit(\"\", 0); end\n";
+    cleanCode += "        frame;\n";
+    cleanCode += "    end\n";
+    cleanCode += "end\n";
   }
 
-  if (!result.contains("includes/scenes_list.prg")) {
-    QString includeLine = "include \"includes/scenes_list.prg\";";
-    int pos = result.indexOf("include \"includes/resources.prg\";");
-    if (pos != -1) {
-      int endInc = result.indexOf(";", pos);
-      if (endInc != -1)
-        result.insert(endInc + 1, "\n" + includeLine + "\n");
-    } else {
-      result.prepend(includeLine + "\n");
-    }
-  }
-
-  return result;
+  return cleanCode;
 }
 
 // ----------------------------------------------------------------------------
@@ -597,6 +645,8 @@ static bool loadSceneJson(const QString &path, SceneData &data) {
     ent->z = obj["z"].toInt();
     ent->angle = obj["angle"].toDouble();
     ent->scale = obj["scale"].toDouble(1.0);
+    ent->scaleX = obj["scaleX"].toDouble(ent->scale);
+    ent->scaleY = obj["scaleY"].toDouble(ent->scale);
     ent->script = obj["script"].toString(); // Relative path usually
     ent->onClick = obj["onClick"].toString();
 
@@ -606,184 +656,195 @@ static bool loadSceneJson(const QString &path, SceneData &data) {
     } else if (ent->type == ENTITY_TEXT) {
       ent->text = obj["text"].toString();
       ent->fontId = obj["fontId"].toInt();
-      ent->fontFile = obj["fontFile"].toString();
       ent->alignment = obj["alignment"].toInt(0);
+
+      if (obj.contains("fontFile")) {
+        ent->fontFile = obj["fontFile"].toString();
+      }
     }
+
+    // Visual Item (NONE) in generator
+    ent->item = nullptr;
 
     data.entities.append(ent);
   }
+
   return true;
 }
 
 QString CodeGenerator::generateScenePrg(const QString &sceneName,
                                         const SceneData &data,
+                                        const QString &interactionMapPath,
                                         const QString &existingCode) {
-  // 1. Extract existing user code to preserve it
-  QString userSetup = "\n    // Add your setup code here\n    ";
-  QString userLoop = "\n        // Add your LOOP code here\n        ";
+  QString code;
+  code += QString("process %1()\n").arg(sceneName);
+  code += "private\n    int ent_id;\n    string w_title;\n";
 
+  QString userSetup, userLoop;
+
+  // Preserve existing user code
   if (!existingCode.isEmpty()) {
-    int s1 = existingCode.indexOf("// [[USER_SETUP]]");
-    int e1 = existingCode.indexOf("// [[USER_SETUP_END]]");
-    if (s1 != -1 && e1 != -1) {
-      userSetup = existingCode.mid(s1 + 17, e1 - (s1 + 17));
+    int startSetup = existingCode.indexOf("// [[USER_SETUP]]");
+    int endSetup = existingCode.indexOf("// [[USER_SETUP_END]]");
+    if (startSetup != -1 && endSetup != -1) {
+      userSetup =
+          existingCode.mid(startSetup + 17, endSetup - (startSetup + 17));
     }
-
-    int s2 = existingCode.indexOf("// [[USER_LOOP]]");
-    int e2 = existingCode.indexOf("// [[USER_LOOP_END]]");
-    if (s2 != -1 && e2 != -1) {
-      userLoop = existingCode.mid(s2 + 16, e2 - (s2 + 16));
+    int startLoop = existingCode.indexOf("// [[USER_LOOP]]");
+    int endLoop = existingCode.indexOf("// [[USER_LOOP_END]]");
+    if (startLoop != -1 && endLoop != -1) {
+      userLoop = existingCode.mid(startLoop + 16, endLoop - (startLoop + 16));
     }
   }
 
-  // Android Wrappers
-  QString assetOpen = m_projectData.androidSupport ? "get_asset_path(" : "";
-  QString assetClose = m_projectData.androidSupport ? ")" : "";
-
-  QString code;
-  code += "// Scene: " + sceneName + "\n";
-  code += "// Generated automatically by RayMap Editor. DO NOT EDIT sections "
-          "outside User Blocks.\n\n";
-
-  // code += "declare FUNCTION string get_asset_path(string path) end\n\n"; //
-  // Removed
-
-  // code += "include \"includes/scene_commons.prg\";\n\n"; // REMOVED: Included
-  // globally in scenes_list.prg
-
-  // Forward declarations for helper processes
+  // Define unique variables for interactive entities to allow robust coordinate
+  // checking
+  int interactiveVarCount = 0;
   for (auto ent : data.entities) {
     if (!ent->onClick.isEmpty()) {
-      QString safeName = ent->name.isEmpty()
-                             ? (ent->type == ENTITY_TEXT ? "Btn" : "Ent")
-                             : ent->name;
-      safeName =
-          safeName.replace(" ", "_").replace("[", "").replace("]", "").replace(
-              ":", "");
-      if (ent->type == ENTITY_TEXT) {
-        QString uniqueId = QString::number(
-            qHash(QString("%1_%2").arg(ent->x).arg(ent->y)) % 10000);
-        code += "declare process Auto_Btn_" + safeName + "_" + uniqueId +
-                "(int font_id);\n";
-      } else {
-        code += "declare process Auto_" + safeName + "();\n";
-      }
+      interactiveVarCount++;
+      code += QString("    int i_ent_%1;\n").arg(interactiveVarCount);
     }
-  }
-  code += "\n";
-
-  code += "process " + sceneName + "()\n";
-  code += "PRIVATE\n";
-  code += "    int ent_id;\n";
-
-  // Resources Variables (Handled globally now)
-  QSet<QString> resources;
-  for (auto ent : data.entities) {
-    if (ent->type == ENTITY_SPRITE && !ent->sourceFile.isEmpty())
-      resources.insert(ent->sourceFile);
-    if (ent->type == ENTITY_TEXT && !ent->fontFile.isEmpty())
-      resources.insert(ent->fontFile);
-  }
-  if (!data.cursorFile.isEmpty())
-    resources.insert(data.cursorFile);
-  if (!data.musicFile.isEmpty())
-    resources.insert(data.musicFile);
-
-  // Resource IDs are now GLOBAL - we use the mapping to refer to them
-  QMap<QString, QString> resMap;
-  for (const QString &res : resources) {
-    QString cleanName = QFileInfo(res).baseName().toLower();
-    cleanName = cleanName.replace(".", "_").replace(" ", "_");
-    QString ext = QFileInfo(res).suffix().toLower();
-    resMap[res] = "id_" + cleanName + "_" + ext;
   }
 
   code += "begin\n";
-  code += "    write_delete(all_text);\n";
+  code += "    // 1. Radical Cleanup: Ensure we are the only process running\n";
+  code += "    let_me_alone();\n";
+  code += "    // Wait a frame to ensure cleanup propagates if needed "
+          "(sometimes safe)\n";
+  code += "    frame;\n\n";
 
-  code += "    // Load Resources - MOVED TO GLOBAL resources.prg\n";
-  // We already generate the resources.prg in a separate step or we can assume
-  // it's there. In generateAllScenes we will make sure resources.prg is
-  // generated.
+  code += "    // Scene Setup\n";
+  code +=
+      QString("    set_mode(%1, %2, 32);\n").arg(data.width).arg(data.height);
 
-  if (!data.musicFile.isEmpty() && resMap.contains(data.musicFile)) {
-    code += "\n    // Music Loading & Playback (Inside scene as per wiki)\n";
-    QString varName = resMap[data.musicFile];
-    QString res = data.musicFile;
-    int loops = data.musicLoop ? -1 : 0;
+  // Load Resources
+  QMap<QString, QString> resMap;
+  QSet<QString> loadedResources;
+  for (const auto &ent : data.entities) {
+    if (ent->sourceFile.isEmpty())
+      continue;
+    if (loadedResources.contains(ent->sourceFile))
+      continue;
 
-    code += "    if (" + varName + " <= 0)\n";
-    code += "        if (fexists(get_asset_path(\"../" + res + "\"))) " +
-            varName + " = music_load(get_asset_path(\"../" + res +
-            "\")); end\n";
-    code += "        if (" + varName + " <= 0) if (fexists(get_asset_path(\"" +
-            res + "\"))) " + varName + " = music_load(get_asset_path(\"" + res +
-            "\")); end end\n";
-    code += "        if (" + varName + " <= 0) if (fexists(\"../" + res +
-            "\")) " + varName + " = music_load(\"../" + res + "\"); end end\n";
-    code += "        if (" + varName + " <= 0) if (fexists(\"" + res + "\")) " +
-            varName + " = music_load(\"" + res + "\"); end end\n";
-    code += "    end\n";
-    code += "    if (" + varName + " > 0)\n";
-    code += "        say(\"DEBUG: Playing music ID \" + " + varName + ");\n";
-    code += "        music_set_volume(128);\n";
-    code += "        music_play(" + varName + ", " + QString::number(loops) +
-            ");\n";
-    code += "    end\n";
-  }
+    QString ext = QFileInfo(ent->sourceFile).suffix().toLower();
+    QString safeName = QFileInfo(ent->sourceFile).fileName().replace(".", "_");
+    safeName.replace("-", "_").replace(" ", "_");
+    QString resVar = "res_" + safeName;
 
-  if (data.inputMode == INPUT_MOUSE || data.inputMode == INPUT_HYBRID) {
-    code += "\n    // Setup Input (Mouse)\n";
-    if (!data.cursorFile.isEmpty()) {
-      QString resVar = resMap[data.cursorFile];
-      QString ext = QFileInfo(data.cursorFile).suffix().toLower();
-
-      if (ext == "fpg") {
-        code += QString("    mouse.file = %1;\n").arg(resVar);
-        code += QString("    mouse.graph = %1;\n").arg(data.cursorGraph);
-      } else {
-        // PNG directly
-        code += "    mouse.file = 0;\n";
-        code += QString("    mouse.graph = %1;\n").arg(resVar);
-      }
+    if (ext == "fpg") {
+      code += QString("    int %1 = fpg_load(\"%2\");\n")
+                  .arg(resVar)
+                  .arg(ent->sourceFile);
+    } else if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "tga" ||
+               ext == "bmp") {
+      code += QString("    int %1 = map_load(\"%2\");\n")
+                  .arg(resVar)
+                  .arg(ent->sourceFile);
     } else {
-      code += "    mouse.graph = 0; // System cursor\n";
+      continue;
     }
+    resMap[ent->sourceFile] = resVar;
+    loadedResources.insert(ent->sourceFile);
   }
 
-  QStringList auxProcesses;
+  // Load Fonts
+  for (const auto &ent : data.entities) {
+    if (ent->type != ENTITY_TEXT || ent->fontFile.isEmpty())
+      continue;
+    if (loadedResources.contains(ent->fontFile))
+      continue;
+
+    QString cleanFontName =
+        QFileInfo(ent->fontFile).baseName().replace(" ", "_").replace("-", "_");
+    QString resVar = "fnt_" + cleanFontName;
+    code += QString("    int %1 = fnt_load(\"%2\");\n")
+                .arg(resVar)
+                .arg(ent->fontFile);
+    resMap[ent->fontFile] = resVar;
+    loadedResources.insert(ent->fontFile);
+  }
+
+  // Load Music
+  if (!data.musicFile.isEmpty() && !loadedResources.contains(data.musicFile)) {
+    QString safeName = QFileInfo(data.musicFile)
+                           .fileName()
+                           .replace(".", "_")
+                           .replace(" ", "_")
+                           .replace("-", "_");
+    QString resVar = "mus_" + safeName;
+    code += QString("    int %1 = music_load(\"%2\");\n")
+                .arg(resVar)
+                .arg(data.musicFile);
+    resMap[data.musicFile] = resVar;
+    loadedResources.insert(data.musicFile);
+  }
+
+  // Set Cursor
+  if (!data.cursorFile.isEmpty()) {
+    QString ext = QFileInfo(data.cursorFile).suffix().toLower();
+    QString resVar = resMap.value(data.cursorFile);
+    if (resVar.isEmpty()) {
+      resVar = "mouse_graph";
+      if (ext == "fpg")
+        code += QString("    int %1 = fpg_load(\"%2\");\n")
+                    .arg(resVar)
+                    .arg(data.cursorFile);
+      else
+        code += QString("    int %1 = map_load(\"%2\");\n")
+                    .arg(resVar)
+                    .arg(data.cursorFile);
+    }
+    if (ext == "fpg") {
+      code += QString("    mouse.file = %1;\n").arg(resVar);
+      code += QString("    mouse.graph = %1;\n").arg(data.cursorGraph);
+    } else {
+      code += "    mouse.file = 0;\n";
+      code += QString("    mouse.graph = %1;\n").arg(resVar);
+    }
+  } else {
+    code += "    mouse.graph = 0; // System cursor\n";
+  }
+
+  // Cleanup Previous Scene (Critical)
+  code += "    // Clean up previous scene\n";
+  code += "    let_me_alone();\n";
+  code += "\n";
+
+  // Music Playback
+  if (!data.musicFile.isEmpty() && resMap.contains(data.musicFile)) {
+    code += "\n    // Music Playback\n";
+    QString varName = resMap[data.musicFile];
+    int loops = data.musicLoop ? -1 : 0;
+    code += QString("    if (%1 > 0)\n").arg(varName);
+    code += "        music_set_volume(128);\n";
+    code += QString("        music_play(%1, %2);\n").arg(varName).arg(loops);
+    code += "    end\n";
+  }
+
+  struct SceneEventData {
+    QString code;
+    QString varName;
+    int hw, hh, hx, hy;
+    int x, y, align; // For text-only fallback
+    bool isSprite;
+  };
+  QList<SceneEventData> sceneEvents;
+  int currentInteractiveIdx = 1;
 
   code += "\n    // Instantiate Entities\n";
   for (auto ent : data.entities) {
     if (ent->type == ENTITY_SPRITE) {
-      QString processName = "StaticSprite";
-      if (!ent->script.isEmpty()) {
-        processName = QFileInfo(ent->script).baseName();
-      } else if (!ent->onClick.isEmpty()) {
-        // Generate Auto Process
-        QString safeName = ent->name.isEmpty() ? "Ent" : ent->name;
-        safeName = safeName.replace(" ", "_");
-        processName = "Auto_" + safeName;
-
-        QString aux = "process " + processName + "()\nbegin\n";
-        aux += "    loop\n";
-        aux += "        if (mouse.left AND collision(type mouse))\n";
-        aux += "             begin\n";
-        aux += "                 " + ent->onClick + ";\n";
-        aux += "                 while(mouse.left) frame; end\n";
-        aux += "             end\n";
-        aux += "        end\n";
-        aux += "        frame;\n";
-        aux += "    end\nend\n";
-        auxProcesses.append(aux);
-      }
+      QString processName = ent->script.isEmpty()
+                                ? "StaticSprite"
+                                : QFileInfo(ent->script).baseName();
 
       code += QString("    // Entity: %1\n").arg(ent->name);
       code += QString("    ent_id = %1();\n").arg(processName);
 
       QString resVar = resMap.value(ent->sourceFile, "0");
-
       QString ext = QFileInfo(ent->sourceFile).suffix().toLower();
+
       if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" ||
           ext == "tga") {
         code += "    ent_id.file = 0;\n";
@@ -797,94 +858,108 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
                   .arg(ent->x)
                   .arg(ent->y)
                   .arg(ent->z);
-      code += QString("    ent_id.angle = %1; ent_id.size = %2;\n")
+      code += QString("    ent_id.angle = %1; ent_id.size_x = %2; "
+                      "ent_id.size_y = %3;\n")
                   .arg(int(ent->angle * 1000))
-                  .arg(int(ent->scale * 100));
+                  .arg(int(ent->scaleX * 100))
+                  .arg(int(ent->scaleY * 100));
+
+      if (!ent->onClick.isEmpty()) {
+        QString vName = QString("i_ent_%1").arg(currentInteractiveIdx++);
+        code += QString("    %1 = ent_id;\n").arg(vName);
+
+        SceneEventData ev;
+        ev.code = ent->onClick;
+        ev.varName = vName;
+        ev.hw = ent->hitW;
+        ev.hh = ent->hitH;
+        ev.hx = ent->hitX;
+        ev.hy = ent->hitY;
+        ev.isSprite = true;
+        sceneEvents.append(ev);
+      }
       code += "\n";
+
     } else if (ent->type == ENTITY_TEXT) {
       QString fontId = "0";
       if (!ent->fontFile.isEmpty() && resMap.contains(ent->fontFile)) {
         fontId = resMap[ent->fontFile];
       }
 
-      code += QString("    // Text Entity: %1\n").arg(ent->name);
+      // Text Entity Logic
+      // If it has onClick, we generate a dedicated Auto_Btn process!
+      if (!ent->onClick.isEmpty()) {
+        // Use scene name + unique index to allow multiple scenes with buttons
+        QString btnProcName = QString("Auto_Btn_%1_%2")
+                                  .arg(sceneName)
+                                  .arg(currentInteractiveIdx++);
+        // Sanitize name to be a valid identifier
+        btnProcName =
+            btnProcName.replace(" ", "_").replace("-", "_").replace(".", "_");
 
-      // Robust check for interactivity
-      bool isInteractive = !ent->onClick.trimmed().isEmpty() &&
-                           !ent->name.startsWith("txt_") &&
-                           ent->onClick != "NONE";
+        code += QString("    // Text Button: %1\n").arg(ent->name);
+        // Pass the font ID (variable name) as argument
+        code += QString("    %1(%2);\n").arg(btnProcName).arg(fontId);
 
-      if (isInteractive) {
-        // Interactive Text Button Process
-        QString safeName = ent->name.isEmpty() ? "Btn" : ent->name;
-        safeName = safeName.replace(" ", "_")
-                       .replace("[", "")
-                       .replace("]", "")
-                       .replace(":", "");
+        // Generate the process in commons or at end of file?
+        // We'll append it to m_inlineCommons for now or a new m_inlineScenes
+        // section. Better: Append to m_inlineScenes, but as a separate process
+        // block.
 
-        // Make unique by adding position hash to avoid collisions
-        QString uniqueId = QString::number(
-            qHash(QString("%1_%2").arg(ent->x).arg(ent->y)) % 10000);
-        QString procName = "Auto_Btn_" + safeName + "_" + uniqueId;
+        QString btnCode;
+        // Process updates to accept font_id
+        btnCode += QString("process %1(int font_id)\n").arg(btnProcName);
+        btnCode += "PRIVATE\n";
+        btnCode += "    int txt_id;\n";
+        btnCode += "    int w, h;\n";
+        btnCode += "    int my_x, my_y;\n";
+        btnCode += "begin\n";
+        btnCode += QString("    my_x = %1; my_y = %2;\n")
+                       .arg(int(ent->x))
+                       .arg(int(ent->y));
+        // Note: write returns the text ID
+        btnCode +=
+            QString("    txt_id = write(font_id, my_x, my_y, %1, \"%2\");\n")
+                .arg(ent->alignment)
+                .arg(ent->text);
+        btnCode +=
+            QString("    w = text_width(font_id, \"%1\");\n").arg(ent->text);
+        btnCode +=
+            QString("    h = text_height(font_id, \"%1\");\n").arg(ent->text);
+        btnCode += "    loop\n";
+        // Logic based on Alignment for Hitbox Check
+        // Align 0 (Left): x to x+w
+        // Align 1 (Center): x-w/2 to x+w/2
+        // Align 2 (Right): x-w to x
 
-        QString aux = "process " + procName + "(int font_id)\n";
-        aux += "PRIVATE\n";
-        aux += "    int txt_id;\n";
-        aux += "    int w; \n";
-        aux += "    int h;\n";
-        aux += "begin\n";
-        aux += QString("    x = %1; y = %2;\n").arg(ent->x).arg(ent->y);
+        QString xCondition;
+        if (ent->alignment == 1) // Center
+          xCondition = "mouse.x > (my_x - w/2) AND mouse.x < (my_x + w/2)";
+        else if (ent->alignment == 2) // Right
+          xCondition = "mouse.x > (my_x - w) AND mouse.x < my_x";
+        else // Left (0)
+          xCondition = "mouse.x > my_x AND mouse.x < (my_x + w)";
 
-        // Make text persistent for this process
-        aux += QString("    txt_id = write(font_id, x, y, %1, \"%2\");\n")
-                   .arg(ent->alignment)
-                   .arg(ent->text);
+        btnCode += QString("        if (mouse.left AND (%1) AND (mouse.y >= "
+                           "(my_y - 5) AND mouse.y <= (my_y + h + 5)))\n")
+                       .arg(xCondition);
+        btnCode += "            // Click Detected\n";
+        btnCode += "            while(mouse.left) frame; end // Wait release\n";
+        btnCode += QString("            %1\n").arg(ent->onClick); // User Action
+        // After action, if scene changes, this process dies via let_me_alone in
+        // next scene. But if action is just logic, we continue loop.
+        btnCode += "        end\n";
+        btnCode += "        frame;\n";
+        btnCode += "    end\n"; // End Loop
+        btnCode += "OnExit:\n";
+        btnCode += "    write_delete(txt_id);\n";
+        btnCode += "end\n\n";
 
-        // Calc Hitbox logic
-        // Note: text_width/height require font loaded.
-        aux += QString("    if(font_id >= 0)\n");
-        aux += QString("        w = text_width(font_id, \"%1\");\n")
-                   .arg(ent->text);
-        aux += QString("        h = text_height(font_id, \"%1\");\n")
-                   .arg(ent->text);
-        aux += QString("    end\n");
-
-        int align = ent->alignment;
-        QString xCheck;
-        if (align == 1)
-          xCheck = "abs(mouse.x - x) < (w/2)"; // Center
-        else if (align == 2)
-          xCheck = "(mouse.x > (x - w) AND mouse.x < x)"; // Right
-        else
-          xCheck = "(mouse.x > x AND mouse.x < (x + w))"; // Left (Default 0)
-
-        aux += "    loop\n";
-
-        // Hover effect? Optional
-
-        // Click logic
-        aux += "        if (" + xCheck +
-               " AND abs(mouse.y - y) < (h/2) AND mouse.left)\n";
-        aux += "             " + ent->onClick + "\n";         // Execute code
-        aux += "             while(mouse.left) frame; end\n"; // Debounce
-        aux += "        end\n";
-        aux += "        frame;\n";
-        aux += "    end\n";
-
-        // Cleanup text when process dies
-        aux += "OnExit:\n";
-        aux += "    write_delete(txt_id);\n";
-        aux += "end\n";
-
-        // Add to aux list
-        auxProcesses.append(aux);
-
-        // Call it
-        code += QString("    %1(%2);\n").arg(procName).arg(fontId);
+        m_inlineScenes += btnCode; // Append this process to the file
 
       } else {
-        // STATIC TEXT (Label)
-        // Just write it in the scene main body
+        // Static Text (No interaction)
+        code += QString("    // Text Entity: %1\n").arg(ent->name);
         code += QString("    write(%1, %2, %3, %4, \"%5\");\n")
                     .arg(fontId)
                     .arg(int(ent->x))
@@ -892,14 +967,14 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
                     .arg(ent->alignment)
                     .arg(ent->text);
       }
+
     } else if (ent->type == ENTITY_WORLD3D) {
       code += QString("\n    // 3D World Hybrid Entity: %1\n").arg(ent->name);
       code += "    RAY_SHUTDOWN();\n";
       code += "    RAY_INIT(640, 480, 70, 1);\n";
-
       QString mapPath = ent->sourceFile;
-      if (mapPath.contains("/assets/"))
-        mapPath = mapPath.mid(mapPath.indexOf("/assets/") + 1);
+      if (mapPath.contains("assets/"))
+        mapPath = mapPath.mid(mapPath.indexOf("assets/"));
 
       code += QString("    if (RAY_LOAD_MAP(\"%1\", 0) == 0) say(\"Error "
                       "loading hybrid 3D Map\"); end\n")
@@ -911,10 +986,69 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   // Inject User Setup
   code += "\n    // [[USER_SETUP]]" + userSetup + "// [[USER_SETUP_END]]\n";
 
+  // Loop Logic
+  code += "    int mouse_last_state = 0;\n";
+  code += "    int scene_exit = 0;\n";
   code += "    loop\n";
+  code += "        if (scene_exit) break; end\n";
   if (data.exitOnEsc) {
     code += "        if (key(_esc)) exit(\"\", 0); end\n";
   }
+
+  // 100% Robust Click Detection (No interaction map needed)
+  if (!sceneEvents.isEmpty()) {
+    code += "\n        // Robust Click Handling\n";
+    code += "        if (mouse.left && !mouse_last_state)\n";
+    code += "            mouse_last_state = 1;\n";
+    code += "            // Check each interactive entity\n";
+
+    // We check events in reverse order (topmost/last created first)
+    for (int i = sceneEvents.size() - 1; i >= 0; i--) {
+      const auto &ev = sceneEvents[i];
+      if (ev.isSprite) {
+        code +=
+            QString("            if (check_scene_click(%1, %2, %3, %4, %5))\n")
+                .arg(ev.varName)
+                .arg(ev.hw)
+                .arg(ev.hh)
+                .arg(ev.hx)
+                .arg(ev.hy);
+      } else {
+        // SIMPLIFIED HITBOX LOGIC (CENTER-BASED)
+        int w = ev.hw > 0 ? ev.hw : 120;
+        int h = ev.hh > 0 ? ev.hh : 30;
+
+        // Force Center Alignment for Hitbox
+        // We assume the user placed the entity where they want the CENTER of
+        // the click to be.
+        int xmin = (ev.x + ev.hx) - (w / 2);
+        int ymin = (ev.y + ev.hy) - (h / 2);
+        int xmax = xmin + w;
+        int ymax = ymin + h;
+
+        // DEBUG VISUALS: REMOVED
+        // box(xmin, ymin, xmax, ymax, map_new(1,1,16), 64);
+
+        code += QString("            if (mouse.x >= %1 && mouse.x <= %2 && "
+                        "mouse.y >= %3 && mouse.y <= %4)\n")
+                    .arg(xmin)
+                    .arg(xmax)
+                    .arg(ymin)
+                    .arg(ymax);
+      }
+      QString sanitizedCode = ev.code;
+      sanitizedCode.replace("\"", "'"); // Sanitize for safe 'say' display
+      code += QString("                // Action: %1\n")
+                  .arg(sanitizedCode.left(30));
+      code += QString("                %1\n").arg(ev.code);
+      code += "                scene_exit = 1;\n";
+      code += "                break; // Stop after first click\n";
+      code += "            end\n"; // Close the hit-test IF
+    }
+    code += "        end\n"; // Close the mouse.left IF
+    code += "        if (!mouse.left) mouse_last_state = 0; end\n";
+  }
+
   // Inject User Loop
   code += "        // [[USER_LOOP]]" + userLoop + "// [[USER_LOOP_END]]\n";
 
@@ -922,71 +1056,168 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   code += "    end\n";
   code += "end\n";
 
-  if (!auxProcesses.isEmpty()) {
-    code += "\n// --- Auto-Generated Helper Processes ---\n\n";
-    code += auxProcesses.join("\n\n");
-  }
-
   return code;
 }
 
-void CodeGenerator::generateAllScenes(const QString &projectPath) {
-  QString scenesOutDir = projectPath + "/src/scenes";
-  QDir().mkpath(scenesOutDir);
+void CodeGenerator::generateAllScenes(const QString &projectPath,
+                                      const QSet<QString> &extraResources) {
+  // Clear inline buffers for Monolithic generation
+  m_inlineCommons.clear();
+  m_inlineResources.clear();
+  m_inlineScenes.clear();
 
-  QString includesDir = projectPath + "/src/includes";
-  QDir().mkpath(includesDir);
+  // We do NOT create subdirectories anymore if we want to be clean,
+  // but let's keep them if user wants to see them? No, user said "dejarnos de
+  // includes". So we skip writing files.
 
-  // Helper
-  QFile helper(includesDir + "/scene_commons.prg");
-  if (helper.open(QIODevice::WriteOnly)) {
-    QTextStream out(&helper);
-    out << "// BennuGD 2 - RayMap Editor Commons\n\n";
+  // ---------------------------------------------------------
+  // 1. GENERATE COMMONS
+  // ---------------------------------------------------------
+  {
+    m_inlineCommons +=
+        "// =============================================================\n";
+    m_inlineCommons += "// COMMONS (Inlined)\n";
+    m_inlineCommons +=
+        "// =============================================================\n\n";
 
-    out << "// Helper para rutas Android\n";
-    out << "// Se usa ruta absoluta hardcodeada basada en el nombre del "
-           "paquete\n";
-    out << "function string get_asset_path(string relative_path)\n";
-    out << "begin\n";
-    out << "    if (os_id == OS_ANDROID)\n";
-    out << "        return \"/data/data/\" + \"{{PACKAGE_NAME}}\" + "
-           "\"/files/\" + relative_path;\n";
-    out << "    end\n";
-    out << "    return relative_path;\n";
-    out << "end\n\n";
+    QString pkgName = m_projectData.packageName.isEmpty()
+                          ? "com.example.game"
+                          : m_projectData.packageName;
 
-    out << "process StaticSprite()\nbegin\n    loop\n        frame;\n    "
-           "end\nend\n\n";
+    m_inlineCommons += "// Android Path Helper\n";
+    m_inlineCommons += "function string get_asset_path(string relative_path)\n";
+    m_inlineCommons += "begin\n";
+    m_inlineCommons += "    if (os_id == OS_ANDROID)\n";
+    m_inlineCommons += "        return \"/data/data/\" + \"" + pkgName +
+                       "\" + \"/files/\" + relative_path;\n";
+    m_inlineCommons += "    else\n";
+    m_inlineCommons += "        // Robust Desktop Path Check (src/ vs root)\n";
+    m_inlineCommons += "        if (!fexists(relative_path) && fexists(\"../\" "
+                       "+ relative_path))\n";
+    m_inlineCommons += "            return \"../\" + relative_path;\n";
+    m_inlineCommons += "        end\n";
+    m_inlineCommons += "    end\n";
+    m_inlineCommons += "    return relative_path;\n";
+    m_inlineCommons += "end\n\n";
 
-    out << "// Proceso de renderizado 3D compartido\n";
-    out << "process ray_display()\nbegin\n    loop\n";
-    out << "        graph = RAY_RENDER(0);\n";
-    out << "        if (graph)\n";
-    out << "            x = 320; y = 240; // Default center\n";
-    out << "        end\n";
-    out << "        frame;\n";
-    out << "    end\n";
-    out << "end\n";
-    helper.close();
+    m_inlineCommons +=
+        "process StaticSprite()\nbegin\n    loop\n        frame;\n    "
+        "end\nend\n\n";
+
+    m_inlineCommons += "// Shared 3D Renderer Process\n";
+    m_inlineCommons += "process ray_display()\nbegin\n    loop\n";
+    m_inlineCommons += "        graph = RAY_RENDER(0);\n";
+    m_inlineCommons += "        if (graph)\n";
+    m_inlineCommons += "            x = 320; y = 240; // Default center\n";
+    m_inlineCommons += "        end\n";
+    m_inlineCommons += "        frame;\n";
+    m_inlineCommons += "    end\n";
+    m_inlineCommons += "end\n\n";
+    m_inlineCommons += "// Shared 2D Click Detection Helper\n";
+    m_inlineCommons += "function int check_scene_click(int id, int hw, int hh, "
+                       "int hx, int hy)\n";
+    m_inlineCommons += "private\n    int w, h, xmin, ymin, xmax, ymax;\n";
+    m_inlineCommons += "begin\n";
+    m_inlineCommons += "    if (id == 0 || !exists(id)) return 0; end\n\n";
+    m_inlineCommons += "    if (hw > 0 && hh > 0)\n";
+    m_inlineCommons += "        w = hw; h = hh;\n";
+    m_inlineCommons += "    else\n";
+    m_inlineCommons += "        // Auto size from graphic (if exists)\n";
+    m_inlineCommons +=
+        "        w = graphic_info(id.file, id.graph, G_WIDTH);\n";
+    m_inlineCommons +=
+        "        h = graphic_info(id.file, id.graph, G_HEIGHT);\n";
+    m_inlineCommons += "        if (w <= 0) w = 64; end \n";
+    m_inlineCommons += "        if (h <= 0) h = 32; end\n";
+    m_inlineCommons += "    end\n\n";
+    m_inlineCommons += "    // Scale Adjustment\n";
+    m_inlineCommons += "    w = w * id.size_x / 100;\n";
+    m_inlineCommons += "    // Simplified Check:\n";
+    m_inlineCommons += "    // If it is a process with a graphic (id > 0), use "
+                       "native collision!\n";
+    m_inlineCommons +=
+        "    // This handles rotation, scale and transparency automatically.\n";
+    m_inlineCommons += "    if (id > 0 && exists(id))\n";
+    m_inlineCommons += "        return collision(type mouse);\n";
+    m_inlineCommons += "    end\n\n";
+    m_inlineCommons +=
+        "    // Fallback for manual areas (Text or No-Graphic)\n";
+    m_inlineCommons += "    // Scale Adjustment for manual sizes\n";
+    m_inlineCommons += "    w = w * id.size_x / 100;\n";
+    m_inlineCommons += "    h = h * id.size_y / 100;\n\n";
+    m_inlineCommons += "    // Alignment-aware X calculation\n";
+    m_inlineCommons += "    // BennuGD write() aligns relative to X.\n";
+    m_inlineCommons += "    // If Align 0 (Left): Box starts at X\n";
+    m_inlineCommons += "    // If Align 1 (Center): Box starts at X - W/2\n";
+    m_inlineCommons += "    // If Align 2 (Right): Box starts at X - W\n";
+    m_inlineCommons += "    \n";
+    m_inlineCommons += "    // We use a safe default if alignment is unknown "
+                       "(assume center like sprites)\n";
+    m_inlineCommons += "    // But for text, we generated 'align' into the "
+                       "event check earlier? \n";
+    m_inlineCommons += "    // Wait, 'id' is a process, it doesn't know "
+                       "'align' in this scope easily unless passed.\n";
+    m_inlineCommons +=
+        "    // However, typical text entities in my generator use:\n";
+    m_inlineCommons += "    // write(..., x, y, alignment, \"text\");\n";
+    m_inlineCommons += "    \n";
+    m_inlineCommons += "    // Let's assume standard centering for SAFETY "
+                       "unless offset manually.\n";
+    m_inlineCommons += "    // Ideally, for text, users check a box that "
+                       "matches the text visual.\n";
+    m_inlineCommons += "    // If this is a manual hitbox (hx, hy, hw, hh), we "
+                       "trust hx/hy are relative to x,y.\n";
+    m_inlineCommons += "    \n";
+    m_inlineCommons += "    // If the user says \"click is only top-left\", it "
+                       "means the detected area is too small\n";
+    m_inlineCommons += "    // or shifted.\n";
+    m_inlineCommons += "    \n";
+    m_inlineCommons +=
+        "    // Let's try to center the box on X,Y by default, effectively:\n";
+    m_inlineCommons += "    xmin = id.x + (hx * id.size_x / 100) - (w / 2);\n";
+    m_inlineCommons += "    ymin = id.y + (hy * id.size_y / 100) - (h / 2);\n";
+    m_inlineCommons += "    xmax = xmin + w;\n";
+    m_inlineCommons += "    ymax = ymin + h;\n";
+    m_inlineCommons += "    \n";
+    m_inlineCommons +=
+        "    // DEBUG: Expand the box slightly to be forgiving?\n";
+    m_inlineCommons += "    // No, let's stick to exact math first.\n";
+    m_inlineCommons += "    \n";
+    m_inlineCommons += "    if (mouse.x >= xmin && mouse.x <= xmax && mouse.y "
+                       ">= ymin && mouse.y <= ymax)\n";
+    m_inlineCommons += "        return 1;\n";
+    m_inlineCommons += "    end\n";
+    m_inlineCommons += "    return 0;\n";
+    m_inlineCommons += "end\n\n";
   }
 
+  // ---------------------------------------------------------
+  // 2. COLLECT RESOURCES & GENERATE SCENES
+  // ---------------------------------------------------------
   QStringList filters;
   filters << "*.scn";
 
-  QStringList generatedIncludes;
-  QStringList sceneNames;
   QSet<QString> processedBaseNames;
-  QSet<QString> allProjectResources;
+  QSet<QString> allProjectResources = extraResources;
+  QStringList sceneNames;
 
-  // First pass: collect all resources from all scenes
   QDir projDir(projectPath);
   QDirIterator it(projectPath, filters, QDir::Files | QDir::NoSymLinks,
                   QDirIterator::Subdirectories);
+
   while (it.hasNext()) {
     QString filePath = it.next();
+    QString baseName = QFileInfo(filePath).baseName();
+
+    if (processedBaseNames.contains(baseName))
+      continue;
+    processedBaseNames.insert(baseName);
+
     SceneData data;
     if (loadSceneJson(filePath, data)) {
       QDir sceneDir = QFileInfo(filePath).absoluteDir();
+
+      // Resource Collection Logic
       auto fix = [&](QString path) -> QString {
         if (path.isEmpty())
           return QString();
@@ -996,10 +1227,6 @@ void CodeGenerator::generateAllScenes(const QString &projectPath) {
                               : info.absoluteFilePath();
         QString projAbs = projDir.absolutePath();
 
-        // If it's outside the project, we can't reliably load it with relative
-        // paths. We should warn, but for now we try to at least make it a
-        // project-relative path if possible or keep it as is if it's already
-        // inside assets.
         if (absPath.startsWith(projAbs)) {
           QString rel = projDir.relativeFilePath(absPath);
           if (!rel.startsWith("assets/") && rel.contains("assets/")) {
@@ -1007,39 +1234,107 @@ void CodeGenerator::generateAllScenes(const QString &projectPath) {
           }
           return rel;
         }
-
-        // Fallback for files outside project: try to find 'assets' in path
         int assetsIdx = absPath.lastIndexOf("assets/");
         if (assetsIdx != -1)
           return absPath.mid(assetsIdx);
 
         return projDir.relativeFilePath(absPath);
       };
-      if (!data.cursorFile.isEmpty())
-        allProjectResources.insert(fix(data.cursorFile));
-      if (!data.musicFile.isEmpty())
-        allProjectResources.insert(fix(data.musicFile));
-      for (auto ent : data.entities) {
-        if (!ent->sourceFile.isEmpty())
-          allProjectResources.insert(fix(ent->sourceFile));
-        if (!ent->fontFile.isEmpty())
-          allProjectResources.insert(fix(ent->fontFile));
+
+      if (!data.cursorFile.isEmpty()) {
+        data.cursorFile = fix(data.cursorFile);
+        allProjectResources.insert(data.cursorFile);
       }
+      if (!data.musicFile.isEmpty()) {
+        data.musicFile = fix(data.musicFile);
+        allProjectResources.insert(data.musicFile);
+      }
+      for (auto ent : data.entities) {
+        if (!ent->sourceFile.isEmpty()) {
+          ent->sourceFile = fix(ent->sourceFile);
+          allProjectResources.insert(ent->sourceFile);
+        }
+        if (!ent->fontFile.isEmpty()) {
+          ent->fontFile = fix(ent->fontFile);
+          allProjectResources.insert(ent->fontFile);
+        }
+      }
+
+      // Generate Code for Scene
+      // Note: We don't read existing .prg file if we are inlining,
+      // UNLESS we want to preserve user edits.
+      // If the user wants to "stop using includes", they likely accept
+      // that manual edits in separate files might be lost or need to be moved.
+      // However, for safety, let's try to read it if it exists in the old
+      // location?
+      QString oldFile = projectPath + "/src/scenes/" + baseName + ".prg";
+      QString existingCode;
+      if (QFile::exists(oldFile)) {
+        QFile f(oldFile);
+        if (f.open(QIODevice::ReadOnly))
+          existingCode = f.readAll();
+      }
+      // Generate Interaction Map
+      QString mapBaseName = baseName + "_input.png";
+      QString fullMapPath = sceneDir.absoluteFilePath(mapBaseName);
+      generateInteractionMap(data, fullMapPath, filePath);
+
+      // Determine relative path for Bennu load
+      // We use the same 'fix' logic or just simpler if we know it is in same
+      // dir
+      QString relMapPath = fix(mapBaseName);
+
+      // Generate Code for Scene
+      QString sceneCode =
+          generateScenePrg(baseName.toLower(), data, relMapPath, existingCode);
+      sceneNames.append(baseName);
+
+      m_inlineScenes +=
+          "\n// "
+          "=============================================================\n";
+      m_inlineScenes += "// SCENE: " + baseName + "\n";
+      m_inlineScenes +=
+          "// =============================================================\n";
+      m_inlineScenes += sceneCode + "\n";
     }
   }
 
-  // Generate resources.prg
-  QFile resFile(includesDir + "/resources.prg");
-  if (resFile.open(QIODevice::WriteOnly)) {
-    QTextStream ts(&resFile);
-    ts << "// Global Project Resources\n\n";
+  // VALIDATE STARTUP SCENE (Smart falling back if renamed/deleted)
+  QString currentStart = m_variables.value("STARTUP_SCENE");
+  if (!sceneNames.isEmpty()) {
+    bool found = false;
+    for (const QString &sn : sceneNames) {
+      if (sn.toLower() == currentStart.toLower()) {
+        found = true;
+        // Ensure exact casing matches process name
+        setVariable("STARTUP_SCENE", sn);
+        break;
+      }
+    }
+    if (!found) {
+      // Fallback to first available scene
+      setVariable("STARTUP_SCENE", sceneNames.first());
+    }
+  } else {
+    // No scenes found? Use a safe placeholder to avoid compiler error
+    setVariable("STARTUP_SCENE", "// No scenes found - check assets/scenes/");
+  }
 
-    // Android Helpers
+  // ---------------------------------------------------------
+  // 3. GENERATE RESOURCES
+  // ---------------------------------------------------------
+  {
+    m_inlineResources +=
+        "// =============================================================\n";
+    m_inlineResources += "// GLOBAL RESOURCES (Inlined)\n";
+    m_inlineResources +=
+        "// =============================================================\n\n";
+
     QString assetOpen = m_projectData.androidSupport ? "get_asset_path(" : "";
     QString assetClose = m_projectData.androidSupport ? ")" : "";
 
-    // 1. GLOBAL Declarations
-    ts << "GLOBAL\n";
+    // Global Declarations
+    m_inlineResources += "GLOBAL\n";
     QMap<QString, QString> resMap;
     for (const QString &res : allProjectResources) {
       QString cleanName = QFileInfo(res).baseName().toLower();
@@ -1047,155 +1342,72 @@ void CodeGenerator::generateAllScenes(const QString &projectPath) {
       QString ext = QFileInfo(res).suffix().toLower();
       QString varName = "id_" + cleanName + "_" + ext;
       resMap[res] = varName;
-      ts << "    int " << varName << ";\n";
+      m_inlineResources += "    int " + varName + ";\n";
     }
-    ts << "end\n\n";
+    m_inlineResources += "end\n\n";
 
-    // 2. Load Function
-    ts << "function load_project_resources()\nbegin\n";
+    // Load Function
+    m_inlineResources += "function load_project_resources()\nbegin\n";
     for (auto it = resMap.begin(); it != resMap.end(); ++it) {
       QString res = it.key();
       QString varName = it.value();
       QString ext = QFileInfo(res).suffix().toLower();
+
       QString loadFunc;
-      if (ext == "fpg")
-        loadFunc = "fpg_load";
-      else if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" ||
-               ext == "tga")
+      if (ext == "fpg" || ext == "map" || ext == "png" || ext == "jpg" ||
+          ext == "jpeg" || ext == "bmp" || ext == "tga")
         loadFunc = "map_load";
       else if (ext == "fnt" || ext == "fnx")
         loadFunc = "fnt_load";
-      // Music is HANDLED IN SCENE directly as per wiki recommendation
+      else if (ext == "mp3" || ext == "ogg" || ext == "wav")
+        loadFunc = "music_load";
 
       if (!loadFunc.isEmpty()) {
-        ts << "    // Loading: " << res << "\n";
-        ts << "    " << varName << " = 0;\n";
-        ts << "    if (" << varName << " <= 0)\n";
-        ts << "        say(\"DEBUG: Checking " << res << " in ../\");\n";
-        ts << "        if (fexists(\"../" << res << "\"))\n";
-        ts << "            " << varName << " = " << loadFunc << "(\"../" << res
-           << "\");\n";
-        ts << "            say(\"  -> Result ID: \" + " << varName << ");\n";
-        ts << "        else\n";
-        ts << "            say(\"  -> File NOT found in ../\");\n";
-        ts << "        end\n";
-        ts << "    end\n";
-
-        ts << "    if (" << varName << " <= 0)\n";
-        ts << "        say(\"DEBUG: Checking " << res << " in root\");\n";
-        ts << "        if (fexists(\"" << res << "\"))\n";
-        ts << "            " << varName << " = " << loadFunc << "(\"" << res
-           << "\");\n";
-        ts << "            say(\"  -> Result ID: \" + " << varName << ");\n";
-        ts << "        else\n";
-        ts << "            say(\"  -> File NOT found in root\");\n";
-        ts << "        end\n";
-        ts << "    end\n";
+        m_inlineResources += "    if (" + varName + " <= 0) " + varName +
+                             " = " + loadFunc + "(" + assetOpen + "\"" + res +
+                             "\"" + assetClose + "); end\n";
+        m_inlineResources += "    if (" + varName +
+                             " > 0) say(\"Loaded resource: " + res +
+                             " ID: \" + " + varName + "); end\n";
       }
     }
-    ts << "end\n\n";
+    m_inlineResources += "end\n\n";
 
-    // 3. Unload Function
-    ts << "function unload_project_resources()\nbegin\n";
+    // Unload Function
+    m_inlineResources += "function unload_project_resources()\nbegin\n";
     for (auto it = resMap.begin(); it != resMap.end(); ++it) {
       QString res = it.key();
       QString varName = it.value();
       QString ext = QFileInfo(res).suffix().toLower();
       if (ext == "fpg")
-        ts << "    if(" << varName << ">0) fpg_unload(" << varName
-           << "); end\n";
+        m_inlineResources +=
+            "    if(" + varName + ">0) fpg_unload(" + varName + "); end\n";
       else if (ext == "fnt" || ext == "fnx")
-        ts << "    if(" << varName << ">0) fnt_unload(" << varName
-           << "); end\n";
+        m_inlineResources +=
+            "    if(" + varName + ">0) fnt_unload(" + varName + "); end\n";
       else if (ext == "mp3" || ext == "ogg" || ext == "wav")
-        ts << "    if(" << varName << ">0) music_unload(" << varName
-           << "); end\n";
+        m_inlineResources +=
+            "    if(" + varName + ">0) music_unload(" + varName + "); end\n";
       else if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" ||
                ext == "tga") {
-        ts << "    if(" << varName << ">0) map_unload(0, " << varName
-           << "); end\n";
+        m_inlineResources +=
+            "    if(" + varName + ">0) map_unload(0, " + varName + "); end\n";
       }
-      ts << "    " << varName << " = 0;\n";
+      m_inlineResources += "    " + varName + " = 0;\n";
     }
-    ts << "end\n\n";
-
-    resFile.close();
+    m_inlineResources += "end\n\n";
   }
 
-  // Second pass: generate each scene PRG
-  QDirIterator it2(projectPath, filters, QDir::Files | QDir::NoSymLinks,
-                   QDirIterator::Subdirectories);
-  while (it2.hasNext()) {
-    QString filePath = it2.next();
-    QString baseName = QFileInfo(filePath).baseName();
-    if (processedBaseNames.contains(baseName))
-      continue;
-    processedBaseNames.insert(baseName);
-
-    SceneData data;
-    if (loadSceneJson(filePath, data)) {
-      // Fix paths again for local generation context
-      QDir sceneDir = QFileInfo(filePath).absoluteDir();
-      auto fixPath = [&](QString &path) {
-        if (path.isEmpty())
-          return;
-        path = projDir.relativeFilePath(
-            QFileInfo(sceneDir, path).absoluteFilePath());
-      };
-      fixPath(data.cursorFile);
-      fixPath(data.musicFile);
-      for (auto ent : data.entities) {
-        fixPath(ent->sourceFile);
-        fixPath(ent->fontFile);
-      }
-
-      QString outFile = scenesOutDir + "/" + baseName + ".prg";
-      QString existingCode;
-      if (QFile::exists(outFile)) {
-        QFile f(outFile);
-        if (f.open(QIODevice::ReadOnly)) {
-          QString content = f.readAll();
-          if (content.contains("Generated automatically"))
-            existingCode = content;
-          f.close();
-        }
-      }
-
-      QString code = generateScenePrg(baseName, data, existingCode);
-      QFile f(outFile);
-      if (f.open(QIODevice::WriteOnly)) {
-        QTextStream out(&f);
-        out << code;
-        f.close();
-        sceneNames.append(baseName);
-        generatedIncludes.append("include \"scenes/" + baseName + ".prg\"");
-      }
-    }
-  }
-
-  // Generate scenes_list.prg
-  QFile listFile(includesDir + "/scenes_list.prg");
-  if (listFile.open(QIODevice::WriteOnly)) {
-    QTextStream ts(&listFile);
-    ts << "// Auto-generated list of scenes\n\n";
-
-    // Ensure resources are available to all scenes - MOVED TO MAIN.PRG to avoid
-    // double include ts << "include \"includes/resources.prg\";\n\n";
-
+  // Scene Navigation Helper (Inlined into scenes block or resources block?
+  // Scenes block seems mostly appropriate)
+  {
+    m_inlineScenes += "\n// Scene Navigation Helper\n";
+    m_inlineScenes += "function goto_scene(string name)\nbegin\n";
+    m_inlineScenes += "    let_me_alone();\n    write_delete(all_text);\n\n";
     for (const QString &sn : sceneNames)
-      ts << "declare process " << sn << "();\n";
-    ts << "\n";
-    for (const QString &inc : generatedIncludes)
-      ts << inc << "\n";
-    ts << "\n";
-
-    ts << "// Scene Navigation Helper\n";
-    ts << "function goto_scene(string name)\nbegin\n";
-    ts << "    let_me_alone();\n    write_delete(all_text);\n\n";
-    for (const QString &sn : sceneNames)
-      ts << "    if (name == \"" << sn << "\") " << sn << "(); return; end\n";
-    ts << "    say(\"Scene not found: \" + name);\nend\n";
-    listFile.close();
+      m_inlineScenes +=
+          "    if (name == \"" + sn + "\") " + sn + "(); return; end\n";
+    m_inlineScenes += "    say(\"Scene not found: \" + name);\nend\n";
   }
 }
 
@@ -1204,21 +1416,9 @@ bool CodeGenerator::patchMainIncludeScenes(const QString &projectPath) {
   QFile f(mainPath);
 
   if (!f.exists()) {
-    // Create Default Main if missing
-    QString content = "import \"libmod_gfx\";\n"
-                      "import \"libmod_input\";\n"
-                      "import \"libmod_misc\";\n"
-                      "import \"libmod_sound\";\n"
-                      "import \"libmod_ray\";\n\n"
-                      "include \"includes/resources.prg\";\n"
-                      "include \"includes/scenes_list.prg\";\n\n"
-                      "process main();\n"
-                      "begin\n"
-                      "    set_mode(640,480,32);\n"
-                      "    // Start your scene here\n"
-                      "    // e.g. MyScene();\n"
-                      "    while(!key(_esc)) frame; end;\n"
-                      "end\n";
+    // Create Default Main if missing (INLINED STYLE)
+    CodeGenerator generator; // Use fresh generator for template
+    QString content = generator.generateMainPrg();
 
     if (f.open(QIODevice::WriteOnly)) {
       f.write(content.toUtf8());
@@ -1228,64 +1428,35 @@ bool CodeGenerator::patchMainIncludeScenes(const QString &projectPath) {
     return false;
   }
 
-  if (!f.open(QIODevice::ReadWrite))
+  if (!f.open(QIODevice::ReadOnly))
     return false;
   QString content = f.readAll();
+  f.close();
 
-  // Ensure libmod_sound is imported
-  if (!content.contains("libmod_sound")) {
-    content.prepend("import \"libmod_sound\";\n");
-  }
+  // We reuse patchMainPrg to inject the monolithic blocks
+  // Since we are likely called after generateAllScenes, 'this' instance
+  // should have the m_inline... variables populated.
+  // However, if called statically or from a fresh instance, we might miss data.
+  // But typically this is called from MainWindow context where generator might
+  // be short-lived. WAIT: This function seems to be used for 2D scene
+  // additions? If we are strictly monolithic, we don't need
+  // "patchMainIncludeScenes" to add includes. We just need to ensure the
+  // monolithic block is up to date.
 
-  // Ensure resources.prg is included (Fix for missing Get_Asset_Path)
-  if (!content.contains("resources.prg")) {
-    QString resInc = "include \"includes/resources.prg\";";
-    // Try to insert after imports
-    int pos = content.lastIndexOf("import \"");
-    if (pos != -1) {
-      int endPos = content.indexOf(";", pos);
-      if (endPos != -1)
-        content.insert(endPos + 1, "\n" + resInc + "\n");
-      else
-        content.prepend(resInc + "\n");
-    } else {
-      // No imports? Prepend
-      content.prepend(resInc + "\n");
-    }
-  }
+  // If 'this' generator has no inline data, we can't really patch effectively
+  // without regenerating everything.
+  // Let's assume the caller has set up the generator correctly (e.g. called
+  // generateAllScenes).
 
-  QString includeLine = "include \"includes/scenes_list.prg\";";
+  QString newContent = this->patchMainPrg(content, QVector<EntityInstance>());
 
-  // Remove redundant direct include of scene_commons if present (it's now in
-  // scenes_list)
-  content.remove("include \"includes/scene_commons.prg\";");
-  content.remove("include \"includes/scene_commons.prg\"");
-
-  if (content.contains("scenes_list.prg")) { // robust check
-    f.resize(0);
-    f.write(content.toUtf8());
+  if (f.open(QIODevice::WriteOnly)) {
+    f.write(newContent.toUtf8());
     f.close();
     return true;
   }
 
-  // Insert after imports
-  int pos = content.lastIndexOf("import \"");
-  if (pos != -1) {
-    int endPos = content.indexOf(";", pos);
-    if (endPos != -1) {
-      content.insert(endPos + 1, "\n" + includeLine + "\n");
-    } else {
-      content.prepend(includeLine + "\n");
-    }
-  } else {
-    content.prepend(includeLine + "\n");
-  }
-
-  f.resize(0);
-  f.seek(0);
-  f.write(content.toUtf8());
-  f.close();
-  return true;
+  return false;
 }
 
 bool CodeGenerator::setStartupScene(const QString &projectPath,
@@ -1299,11 +1470,15 @@ bool CodeGenerator::setStartupScene(const QString &projectPath,
     f.copy(mainPath + ".bak");
   }
 
-  CodeGenerator generator;
+  // UPDATE CURRENT INSTANCE DATA using loading if needed, or just specific
+  // field We assume generateAllScenes was called on 'this' so we have the
+  // inline data. But we need ensuring project data is up to date with the
+  // startup scene.
   ProjectData data = ProjectManager::loadProjectData(projectPath);
   data.startupScene = sceneName;
-  generator.setProjectData(data);
+  this->setProjectData(data);
 
+  // Save updated data
   ProjectManager::saveProjectData(projectPath, data);
 
   QString existingContent;
@@ -1315,10 +1490,16 @@ bool CodeGenerator::setStartupScene(const QString &projectPath,
   QString newCode;
   if (existingContent.isEmpty() ||
       !existingContent.contains("// [[ED_STARTUP_SCENE_START]]")) {
-    newCode = generator.generateMainPrg();
+    // Generate Base + Patch (Inject Monolithic Block)
+    QString baseCode = this->generateMainPrg();
+    newCode = this->patchMainPrg(baseCode, QVector<EntityInstance>());
   } else {
-    newCode =
-        generator.patchMainPrg(existingContent, QVector<EntityInstance>());
+    // Pass empty entities vector if we are just setting startup scene,
+    // but typically we'd want the entities.
+    // Ideally we should have entities stored?
+    // For now we assume patchMainPrg handles the structure preservation
+    // and our inline injection logic adds the content.
+    newCode = this->patchMainPrg(existingContent, QVector<EntityInstance>());
   }
 
   if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -1327,4 +1508,125 @@ bool CodeGenerator::setStartupScene(const QString &projectPath,
     return true;
   }
   return false;
+}
+
+// ----------------------------------------------------------------------------
+// Interaction Map Generation
+// ----------------------------------------------------------------------------
+#include <QBitmap>
+#include <QPainter>
+
+void CodeGenerator::generateInteractionMap(const SceneData &data,
+                                           const QString &fullPath,
+                                           const QString &scenePath) {
+  // Use RGB32 for colorful map
+  QImage img(data.width, data.height, QImage::Format_RGB32);
+  img.fill(Qt::black); // Background 0
+
+  QPainter p(&img);
+  p.setRenderHint(QPainter::Antialiasing, false);
+  p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+
+  int nextEventId = 1;
+
+  for (SceneEntity *ent : data.entities) {
+    // Check for Manual Hitbox Override
+    bool hasManualHitbox = (ent->hitW > 0 && ent->hitH > 0);
+
+    // Filter non-interactive entities if no manual hitbox
+    if (!hasManualHitbox) {
+      if (ent->type == ENTITY_SPRITE) {
+        if (ent->onClick.isEmpty())
+          continue;
+      } else if (ent->type == ENTITY_TEXT) {
+        bool isInteractive =
+            !ent->onClick.trimmed().isEmpty() && ent->onClick != "NONE";
+        if (!isInteractive)
+          continue;
+      } else {
+        continue; // Skip other types if no manual hitbox
+      }
+    } else {
+      // Manual hitbox implies interactivity check
+      if (ent->onClick.isEmpty() || ent->onClick == "NONE")
+        continue;
+    }
+
+    int id = nextEventId++;
+    if (id > 255)
+      continue;
+
+    // Color Generation
+    int hue = (id * 137) % 360;
+    QColor col = QColor::fromHsv(hue, 255, 255);
+
+    p.save();
+    p.translate(ent->x, ent->y);
+
+    // Draw Manual Hitbox
+    if (hasManualHitbox) {
+      p.setPen(Qt::NoPen);
+      p.setBrush(col);
+      p.rotate(ent->angle); // Rotate manual box with entity
+      // Draw centered at offset
+      p.drawRect(ent->hitX - ent->hitW / 2, ent->hitY - ent->hitH / 2,
+                 ent->hitW, ent->hitH);
+      p.restore();
+      continue;
+    }
+
+    // Default Rendering Logic
+    if (ent->type == ENTITY_SPRITE) {
+      QPixmap pm(ent->sourceFile);
+      if (pm.isNull()) {
+        p.restore();
+        continue;
+      }
+
+      p.rotate(ent->angle);
+      p.scale(ent->scaleX, ent->scaleY);
+
+      // Draw Sprite Bounding Box (No Mask for heavier interaction)
+      QPixmap solid(pm.size());
+      solid.fill(col);
+      // solid.setMask(mask); // Removed to make interaction area the full box
+
+      // Center the sprite (Bennu sprites are centered)
+      p.drawPixmap(-pm.width() / 2, -pm.height() / 2, solid);
+
+    } else if (ent->type == ENTITY_TEXT) {
+      p.setPen(QPen(col, 1));
+      p.setBrush(QBrush(col));
+
+      // Rough estimation: 14px width per char? 30px height?
+      int w = ent->text.length() * 14;
+      int h = 30;
+
+      // Handle Alignment
+      if (ent->alignment == 0) // Left
+        p.drawRect(0, 0, w, h);
+      else if (ent->alignment == 1) // Center
+        p.drawRect(-w / 2, 0, w, h);
+      else // Right
+        p.drawRect(-w, 0, w, h);
+    }
+    p.restore();
+  }
+
+  // Blend Manual Painted Layer
+  QFileInfo sceneInfo(scenePath);
+  QString layerPath = sceneInfo.absolutePath() + "/" + sceneInfo.baseName() +
+                      "_interaction.png";
+  if (QFile::exists(layerPath)) {
+
+    QImage layer(layerPath);
+    if (!layer.isNull()) {
+      p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+      p.drawImage(0, 0, layer);
+    }
+  }
+
+  p.end();
+
+  img.save(fullPath);
 }

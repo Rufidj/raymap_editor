@@ -13,35 +13,114 @@ DESTDIR = $$PWD
 
 # Archivos header
 HEADERS += \
-    mainwindow.h \
-    fpgloader.h \
-    fpgeditor.h \
-    grideditor.h \
-    texturepalette.h \
-    spriteeditor.h \
+    assetbrowser.h \
+    bennugdinstaller.h \
+    bennurenderer.h \
+    buildmanager.h \
+    camerakeyframe.h \
     cameramarker.h \
-    raymapformat.h \
-    mapdata.h \
+    camerapath.h \
+    camerapathcanvas.h \
+    camerapatheditor.h \
+    camerapathio.h \
+    codeeditor.h \
+    codeeditordialog.h \
+    codegenerator.h \
+    codepreviewpanel.h \
+    consolewidget.h \
+    downloader.h \
+    effectgenerator.h \
+    effectgeneratordialog.h \
+    entitybehaviordialog.h \
+    entitypropertypanel.h \
+    fonteditordialog.h \
+    fpgeditor.h \
+    fpgloader.h \
+    grideditor.h \
     insertboxdialog.h \
-    meshgeneratordialog.h \
+    mainwindow.h \
+    mapdata.h \
     md3generator.h \
-    modelpreviewwidget.h
+    md3loader.h \
+    meshgeneratordialog.h \
+    modelpreviewwidget.h \
+    newprojectdialog.h \
+    objimportdialog.h \
+    objtomd3converter.h \
+    processgenerator.h \
+    projectmanager.h \
+    projectsettingsdialog.h \
+    publishdialog.h \
+    publisher.h \
+    rampgenerator.h \
+    rampgeneratordialog.h \
+    raycastrenderer.h \
+    raymapformat.h \
+    sceneeditor.h \
+    spriteeditor.h \
+    textureatlasgen.h \
+    texturepalette.h \
+    textureselector.h \
+    visualmodewidget.h \
+    visualrenderer.h \
+    wldimporter.h
 
 # Archivos fuente
 SOURCES += \
+    assetbrowser.cpp \
+    bennugdinstaller.cpp \
+    bennurenderer.cpp \
+    buildmanager.cpp \
+    cameramarker.cpp \
+    camerapath.cpp \
+    camerapathcanvas.cpp \
+    camerapatheditor.cpp \
+    camerapathio.cpp \
+    codeeditor.cpp \
+    codeeditordialog.cpp \
+    codegenerator.cpp \
+    codepreviewpanel.cpp \
+    consolewidget.cpp \
+    downloader.cpp \
+    effectgenerator.cpp \
+    effectgeneratordialog.cpp \
+    entitybehaviordialog.cpp \
+    entitypropertypanel.cpp \
+    fonteditordialog.cpp \
+    fpgeditor.cpp \
+    fpgloader.cpp \
+    grideditor.cpp \
+    insertboxdialog.cpp \
     main.cpp \
     mainwindow.cpp \
-    fpgloader.cpp \
-    fpgeditor.cpp \
-    grideditor.cpp \
-    texturepalette.cpp \
-    spriteeditor.cpp \
-    cameramarker.cpp \
-    raymapformat.cpp \
-    insertboxdialog.cpp \
-    meshgeneratordialog.cpp \
+    mainwindow_build.cpp \
+    mainwindow_darkmode.cpp \
+    mainwindow_project.cpp \
     md3generator.cpp \
-    modelpreviewwidget.cpp
+    md3loader.cpp \
+    meshgeneratordialog.cpp \
+    modelpreviewwidget.cpp \
+    newprojectdialog.cpp \
+    objimportdialog.cpp \
+    objtomd3converter.cpp \
+    processgenerator.cpp \
+    projectmanager.cpp \
+    projectsettingsdialog.cpp \
+    publishdialog.cpp \
+    publisher.cpp \
+    rampgenerator.cpp \
+    rampgeneratordialog.cpp \
+    rampgeneratordialog_texture_slots.cpp \
+    raycastrenderer.cpp \
+    raymapformat.cpp \
+    sceneeditor.cpp \
+    spriteeditor.cpp \
+    textureatlasgen.cpp \
+    texturepalette.cpp \
+    textureselector.cpp \
+    visualmodewidget.cpp \
+    visualrenderer.cpp \
+    wldimporter.cpp
 
 # Archivos UI
 FORMS += \

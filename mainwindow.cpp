@@ -16,6 +16,7 @@
 #include "insertboxdialog.h" // Insert Box dialog
 #include "md3generator.h"
 #include "meshgeneratordialog.h"
+#include "npcpatheditor.h"
 #include "objimportdialog.h"
 #include "projectmanager.h"
 #include "raymapformat.h"
@@ -330,6 +331,13 @@ void MainWindow::createMenus() {
   connect(cameraPathAction, &QAction::triggered, this,
           &MainWindow::onOpenCameraPathEditor);
   toolsMenu->addAction(cameraPathAction);
+
+  QAction *npcPathAction = new QAction(tr("Gestionar Rutas NPC..."), this);
+  npcPathAction->setShortcut(QKeySequence(tr("Ctrl+Shift+N")));
+  npcPathAction->setStatusTip(tr("Manage NPC movement paths"));
+  connect(npcPathAction, &QAction::triggered, this,
+          &MainWindow::onManageNPCPaths);
+  toolsMenu->addAction(npcPathAction);
 
   // Ramp Generator
   // Ramp Generator REMOVED (Pivoting to MD3)
@@ -1110,6 +1118,8 @@ void MainWindow::onNewMap() {
           &MainWindow::onEntitySelected);
   connect(editor, &GridEditor::entityMoved, this,
           &MainWindow::onEntityChanged); // Live visual update
+  connect(editor, &GridEditor::requestEditEntityBehavior, this,
+          &MainWindow::onEditEntityBehavior);
 
   // Apply current textures to it
   editor->setTextures(m_textureCache);
@@ -1248,6 +1258,8 @@ void MainWindow::onImportWLD() {
     connect(editor, &GridEditor::decalPlaced, this, &MainWindow::onDecalPlaced);
     connect(editor, &GridEditor::cameraPlaced, this,
             &MainWindow::onCameraPlaced);
+    connect(editor, &GridEditor::requestEditEntityBehavior, this,
+            &MainWindow::onEditEntityBehavior);
     connect(editor, &GridEditor::entitySelected, this,
             &MainWindow::onEntitySelected);
     connect(editor, &GridEditor::entityMoved, this,
@@ -3818,6 +3830,8 @@ void MainWindow::openMapFile(const QString &filename) {
             &MainWindow::onEntitySelected);
     connect(editor, &GridEditor::entityMoved, this,
             &MainWindow::onEntityChanged);
+    connect(editor, &GridEditor::requestEditEntityBehavior, this,
+            &MainWindow::onEditEntityBehavior);
 
     m_tabWidget->addTab(editor, QFileInfo(filename).fileName());
     m_tabWidget->setCurrentWidget(editor);
@@ -4098,8 +4112,86 @@ void MainWindow::onOpenFontEditor() {
   dialog.exec();
 }
 
+void MainWindow::onManageNPCPaths() {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor) {
+    QMessageBox::warning(this, tr("No Map Loaded"),
+                         tr("Please load or create a map first."));
+    return;
+  }
+
+  MapData *mapData = editor->mapData();
+  if (!mapData) {
+    return;
+  }
+
+  // Show dialog to select which path to edit or create new
+  QStringList pathNames;
+  pathNames << tr("(Create New Path)");
+  for (const NPCPath &path : mapData->npcPaths) {
+    pathNames << QString("%1 (ID: %2)").arg(path.name).arg(path.path_id);
+  }
+
+  bool ok;
+  QString selected = QInputDialog::getItem(this, tr("Manage NPC Paths"),
+                                           tr("Select a path to edit:"),
+                                           pathNames, 0, false, &ok);
+
+  if (!ok) {
+    return;
+  }
+
+  int selectedIndex = pathNames.indexOf(selected);
+  NPCPath pathToEdit;
+  bool isNewPath = (selectedIndex == 0);
+
+  if (!isNewPath) {
+    pathToEdit = mapData->npcPaths[selectedIndex - 1];
+  } else {
+    // Create new path with unique ID
+    int maxId = -1;
+    for (const NPCPath &p : mapData->npcPaths) {
+      if (p.path_id > maxId) {
+        maxId = p.path_id;
+      }
+    }
+    pathToEdit.path_id = maxId + 1;
+    pathToEdit.name = tr("New Path %1").arg(pathToEdit.path_id);
+    pathToEdit.loop_mode = NPCPath::LOOP_NONE;
+    pathToEdit.visible = true;
+  }
+
+  // Open editor
+  NPCPathEditor pathEditor(pathToEdit, mapData, this);
+  if (pathEditor.exec() == QDialog::Accepted) {
+    NPCPath editedPath = pathEditor.getPath();
+
+    if (isNewPath) {
+      mapData->npcPaths.append(editedPath);
+      QMessageBox::information(
+          this, tr("Path Created"),
+          tr("NPC Path '%1' created successfully.").arg(editedPath.name));
+    } else {
+      mapData->npcPaths[selectedIndex - 1] = editedPath;
+      QMessageBox::information(
+          this, tr("Path Updated"),
+          tr("NPC Path '%1' updated successfully.").arg(editedPath.name));
+    }
+
+    // Mark map as modified
+    editor->update();
+  }
+}
+
 void MainWindow::onEditEntityBehavior(int index, const EntityInstance &entity) {
-  EntityBehaviorDialog dialog(entity, QStringList(), this);
+  GridEditor *editor = getCurrentEditor();
+  const QVector<NPCPath> *availablePaths = nullptr;
+
+  if (editor) {
+    availablePaths = &editor->mapData()->npcPaths;
+  }
+
+  EntityBehaviorDialog dialog(entity, availablePaths, QStringList(), this);
   if (dialog.exec() == QDialog::Accepted) {
     onEntityChanged(index, dialog.getEntity());
   }

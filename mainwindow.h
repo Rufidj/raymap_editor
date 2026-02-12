@@ -66,6 +66,7 @@ private slots:
   void onFPGReloaded();
   void onOpenEffectGenerator();
   void onOpenCameraPathEditor();
+  void onManageNPCPaths();    // NEW: NPC Path Manager
   void onOpenMeshGenerator(); // NEW: MD3 Generator
   void onOpenFontEditor();    // NEW: Font Editor
 

@@ -512,8 +512,6 @@ bool SceneEditor::loadScene(const QString &fileName) {
 
   m_screenBorder->setPen(QPen(Qt::yellow, 2, Qt::DashLine));
   m_screenBorder->setZValue(1000);
-  // m_screenBorder->setEnabled(false); // Can't disable it or it won't draw?
-  // No, it just disables input. Actually set it to not accept input
   m_screenBorder->setAcceptedMouseButtons(Qt::NoButton);
   m_scene->addItem(m_screenBorder);
   qDeleteAll(m_data.entities);
@@ -539,6 +537,9 @@ bool SceneEditor::loadScene(const QString &fileName) {
   m_data.musicFile = root["musicFile"].toString();
   m_data.musicLoop = root["musicLoop"].toBool(true);
 
+  m_data.timeout = root["timeout"].toInt(0);
+  m_data.nextScene = root["nextScene"].toString();
+
   QJsonArray entitiesArray = root["entities"].toArray();
   for (const QJsonValue &val : entitiesArray) {
     QJsonObject obj = val.toObject();
@@ -548,7 +549,7 @@ bool SceneEditor::loadScene(const QString &fileName) {
     ent->name = obj["name"].toString();
     ent->x = obj["x"].toDouble();
     ent->y = obj["y"].toDouble();
-    ent->z = obj["z"].toInt();
+    ent->z = obj["z"].toDouble();
     ent->angle = obj["angle"].toDouble();
     ent->scale = obj["scale"].toDouble(1.0);
     ent->scaleX = obj["scaleX"].toDouble(ent->scale);
@@ -564,7 +565,6 @@ bool SceneEditor::loadScene(const QString &fileName) {
     if (ent->type == ENTITY_SPRITE) {
       QString srcRel = obj["sourceFile"].toString();
       QFileInfo sceneInfo(fileName);
-      // Construct absolute path
       ent->sourceFile =
           QDir(sceneInfo.absolutePath())
               .cleanPath(QDir(sceneInfo.absolutePath()).filePath(srcRel));
@@ -584,8 +584,16 @@ bool SceneEditor::loadScene(const QString &fileName) {
                 .cleanPath(QDir(sceneInfo.absolutePath()).filePath(fontRel));
       }
     }
+    // World 3D
+    else if (ent->type == ENTITY_WORLD3D) {
+      QString srcRel = obj["sourceFile"].toString();
+      QFileInfo sceneInfo(fileName);
+      ent->sourceFile =
+          QDir(sceneInfo.absolutePath())
+              .cleanPath(QDir(sceneInfo.absolutePath()).filePath(srcRel));
+    }
 
-    // Visual Item
+    // Visual Item (Common)
     SceneEntityItem *item = new SceneEntityItem(ent);
     m_scene->addItem(item);
     ent->item = item;
@@ -598,7 +606,6 @@ bool SceneEditor::loadScene(const QString &fileName) {
   QString interactionPath =
       scnInfo.absolutePath() + "/" + scnInfo.baseName() + "_interaction.png";
   if (QFileInfo::exists(interactionPath)) {
-
     m_interactionMap.load(interactionPath);
     m_interactionPixmapItem->setPixmap(QPixmap::fromImage(m_interactionMap));
   } else {
@@ -632,6 +639,10 @@ bool SceneEditor::saveScene(const QString &fileName) {
   if (!m_data.musicFile.isEmpty())
     root["musicFile"] = sceneDir.relativeFilePath(m_data.musicFile);
   root["musicLoop"] = m_data.musicLoop;
+
+  root["timeout"] = m_data.timeout;
+  if (!m_data.nextScene.isEmpty())
+    root["nextScene"] = m_data.nextScene;
   QJsonArray entitiesArray;
 
   for (SceneEntity *ent : m_data.entities) {
@@ -675,6 +686,9 @@ bool SceneEditor::saveScene(const QString &fileName) {
             QDir(QFileInfo(fileName).path()).relativeFilePath(ent->fontFile);
       }
       obj["alignment"] = ent->alignment;
+    } else if (ent->type == ENTITY_WORLD3D) {
+      obj["sourceFile"] =
+          QDir(QFileInfo(fileName).path()).relativeFilePath(ent->sourceFile);
     }
 
     entitiesArray.append(obj);
@@ -966,10 +980,21 @@ void SceneEditor::contextMenuEvent(QContextMenuEvent *event) {
           QCheckBox *exitCheck = new QCheckBox("Salir con ESC");
           exitCheck->setChecked(m_data.exitOnEsc);
 
+          // Timeout
+          QSpinBox *timeoutSpin = new QSpinBox();
+          timeoutSpin->setRange(0, 9999);
+          timeoutSpin->setSuffix(" seg");
+          timeoutSpin->setValue(m_data.timeout);
+
+          QLineEdit *nextSceneEdit = new QLineEdit(m_data.nextScene);
+          nextSceneEdit->setPlaceholderText("Nombre de la escena (ej: menu2)");
+
           layout->addRow("Ancho:", wSpin);
           layout->addRow("Alto:", hSpin);
           layout->addRow("Input:", inputCombo);
           layout->addRow("Opciones:", exitCheck);
+          layout->addRow("Timeout:", timeoutSpin);
+          layout->addRow("Siguiente Escena:", nextSceneEdit);
           layout->addRow("---------------", new QWidget());
           layout->addRow("Cursor File:", cursorLay);
           layout->addRow("Cursor GraphID:", cursorGraphSpin);
@@ -984,6 +1009,8 @@ void SceneEditor::contextMenuEvent(QContextMenuEvent *event) {
             setResolution(wSpin->value(), hSpin->value());
             m_data.inputMode = inputCombo->currentData().toInt();
             m_data.exitOnEsc = exitCheck->isChecked();
+            m_data.timeout = timeoutSpin->value();
+            m_data.nextScene = nextSceneEdit->text();
             m_data.cursorFile = cursorPathEdit->text();
             m_data.cursorGraph = cursorGraphSpin->value();
             emit sceneChanged(); // Realtime update
@@ -1208,7 +1235,11 @@ void SceneEditor::contextMenuEvent(QContextMenuEvent *event) {
     QFormLayout *layout = new QFormLayout(&dlg);
 
     QLineEdit *nameEdit = new QLineEdit(ent->name);
+    QCheckBox *introCheck = new QCheckBox("Es Intro (Bloquea Jugador)");
+    introCheck->setChecked(ent->isIntro);
+
     layout->addRow("Nombre:", nameEdit);
+    layout->addRow("", introCheck);
 
     QLineEdit *textEdit = nullptr;
     QComboBox *fontCombo = nullptr;
@@ -1285,6 +1316,7 @@ void SceneEditor::contextMenuEvent(QContextMenuEvent *event) {
 
     if (dlg.exec() == QDialog::Accepted) {
       ent->name = nameEdit->text();
+      ent->isIntro = introCheck->isChecked();
       if (textEdit)
         ent->text = textEdit->text();
       if (fontCombo) {

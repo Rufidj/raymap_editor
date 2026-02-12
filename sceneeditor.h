@@ -31,7 +31,7 @@ struct SceneEntity {
   // Transform
   double x = 0;
   double y = 0;
-  int z = 0;
+  double z = 0;
   double angle = 0;
   double scale = 1.0;
   double scaleX = 1.0;
@@ -58,6 +58,9 @@ struct SceneEntity {
   int hitX = 0; // Offset X
   int hitY = 0; // Offset Y
 
+  // Cutscene
+  bool isIntro = false;
+
   // Runtime
   SceneEntityItem *item = nullptr;
 };
@@ -73,6 +76,10 @@ struct SceneData {
   QString backgroundFile;
   int inputMode = INPUT_MOUSE; // Default
   bool exitOnEsc = true;       // New: Auto-generate ESC exit code
+
+  // Scene Flow
+  int timeout = 0;   // 0 = Disabled. Duration in seconds.
+  QString nextScene; // Name of the next scene to go (if timeout > 0)
 
   // Music support
   QString musicFile;

@@ -104,6 +104,8 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         md3generator.h md3generator.cpp
         modelpreviewwidget.h modelpreviewwidget.cpp
         textureatlasgen.h textureatlasgen.cpp
+        npcpatheditor.h npcpatheditor.cpp
+        npcpathcanvas.h npcpathcanvas.cpp
     )
 else()
     add_executable(raymap_editor
@@ -133,6 +135,8 @@ else()
         md3generator.h md3generator.cpp
         modelpreviewwidget.h modelpreviewwidget.cpp
         textureatlasgen.h textureatlasgen.cpp
+        npcpatheditor.h npcpatheditor.cpp
+        npcpathcanvas.h npcpathcanvas.cpp
     )
 endif()
 

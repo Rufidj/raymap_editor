@@ -1,6 +1,9 @@
 #include "codegenerator.h"
+#include "mapdata.h" // Needed for MapData structure
 #include "processgenerator.h"
+#include "raymapformat.h" // Needed to read map entities
 #include "sceneeditor.h"
+#include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QDirIterator>
@@ -13,7 +16,9 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QSet>
+#include <QString>
 #include <QTextStream>
+#include <QVector>
 
 CodeGenerator::CodeGenerator() {}
 
@@ -83,19 +88,8 @@ QString CodeGenerator::processTemplate(const QString &templateText) {
 }
 
 QString CodeGenerator::generateMainPrg() {
-  if (m_projectData.name.isEmpty()) {
-    qWarning() << "No project data set for code generation";
-    return "";
-  }
-
-  QString template_text = getMainTemplate();
-
-  // Clear legacy variables to prevent redefinitions in main.prg
-  setVariable("ENTITY_DECLARATIONS", "");
-  setVariable("ENTITY_PROCESSES", "");
-  setVariable("SPAWN_ENTITIES", "");
-
-  return processTemplate(template_text);
+  return generateMainPrgWithEntities(QVector<EntityInstance>(),
+                                     QVector<NPCPath>());
 }
 
 QString CodeGenerator::generateEntityProcess(const QString &entityName,
@@ -122,73 +116,116 @@ QString CodeGenerator::generateEntityProcess(const QString &entityName,
 }
 
 QString CodeGenerator::getMainTemplate() {
-  return QString("// Auto-generado por RayMap Editor\n"
-                 "// Proyecto: {{PROJECT_NAME}}\n"
-                 "// Fecha: {{DATE}}\n"
-                 "\n"
-                 "import \"libmod_gfx\";\n"
-                 "import \"libmod_input\";\n"
-                 "import \"libmod_misc\";\n"
-                 "import \"libmod_ray\";\n"
-                 "import \"libmod_sound\";\n"
-                 "\n"
-                 "\n"
-                 "\n"
-                 "\n"
-                 "// Constantes de entidad\n"
-                 "// [[ED_CONSTANTS_START]]\n"
-                 "CONST\n"
-                 "    TYPE_PLAYER = 1;\n"
-                 "    TYPE_ENEMY  = 2;\n"
-                 "    TYPE_OBJECT = 3;\n"
-                 "    TYPE_TRIGGER = 4;\n"
-                 "    \n"
-                 "    // Debug\n"
-                 "    DEBUG_HITBOXES = 0; // Set to 1 to see click areas\n"
-                 "end\n"
-                 "// [[ED_CONSTANTS_END]]\n"
-                 "\n"
-                 "// [[ED_DECLARATIONS_START]]\n"
-                 "// [[ED_DECLARATIONS_END]]\n"
-                 "\n"
-                 "GLOBAL\n"
-                 "    int screen_w = {{SCREEN_WIDTH}};\n"
-                 "    int screen_h = {{SCREEN_HEIGHT}};\n"
-                 "end\n"
-                 "\n"
-                 "process main()\n"
-                 "begin\n"
-                 "    say(\"--- PROGRAM START ---\");\n"
-                 "    say(\"CWD: \" + cd());\n"
-                 "    // Inicializar pantalla\n"
-                 "    set_mode(screen_w, screen_h, {{FULLSCREEN_MODE}});\n"
-                 "    set_fps({{FPS}}, 0);\n"
-                 "    window_set_title(\"{{PROJECT_NAME}}\");\n"
-                 "\n"
-                 "    // Inicializar sistema de audio (Estilo Joselkiller)\n"
-                 "    sound.freq = 44100;\n"
-                 "    sound.channels = 32;\n"
-                 "    int audio_status = soundsys_init();\n"
-                 "    reserve_channels(24);\n"
-                 "    set_master_volume(128);\n"
-                 "    music_set_volume(128);\n"
-                 "    say(\"AUDIO: Init status \" + audio_status + \" (Driver: "
-                 "\" + getenv(\"SDL_AUDIODRIVER\") + \")\");\n"
-                 "\n"
-                 "    // Load all project resources\n"
-                 "    load_project_resources();\n"
-                 "\n"
-                 "    // Start Initial Scene\n"
-                 "    // [[ED_STARTUP_SCENE_START]]\n"
-                 "    {{STARTUP_SCENE}}();\n"
-                 "    // [[ED_STARTUP_SCENE_END]]\n"
-                 "\n"
-                 "    // Main Loop (just in case scene returns)\n"
-                 "    loop\n"
-                 "        if (key(_esc)) exit(\"\", 0); end\n"
-                 "        frame;\n"
-                 "    end\n"
-                 "end\n");
+  return QString(
+      "// [[ED_HEADER_START]]\n"
+      "// Auto-generado por RayMap Editor\n"
+      "// Proyecto: {{PROJECT_NAME}}\n"
+      "// Fecha: {{DATE}}\n"
+      "// [[ED_HEADER_END]]\n"
+      "\n"
+      "import \"libmod_gfx\";\n"
+      "import \"libmod_input\";\n"
+      "import \"libmod_misc\";\n"
+      "import \"libmod_ray\";\n"
+      "import \"libmod_sound\";\n"
+      "\n"
+      "// [[USER_IMPORTS_START]]\n"
+      "// [[USER_IMPORTS_END]]\n"
+      "\n"
+      "// ---------------------------------------------------------\n"
+      "// CONSTANTES\n"
+      "// ---------------------------------------------------------\n"
+      "CONST\n"
+      "    // [[ED_CONSTANTS_START]]\n"
+      "    TYPE_PLAYER = 1;\n"
+      "    TYPE_ENEMY  = 2;\n"
+      "    TYPE_OBJECT = 3;\n"
+      "    TYPE_TRIGGER = 4;\n"
+      "    DEBUG_HITBOXES = 0;\n"
+      "    // [[ED_CONSTANTS_END]]\n"
+      "    \n"
+      "    // [[USER_CONSTANTS_START]]\n"
+      "    // [[USER_CONSTANTS_END]]\n"
+      "END\n"
+      "\n"
+      "// ---------------------------------------------------------\n"
+      "// DECLARACIONES Y PROCESOS DEL EDITOR\n"
+      "// ---------------------------------------------------------\n"
+      "// [[ED_PROCESSES_START]]\n"
+      "{{ENTITY_PROCESSES}}\n"
+      "\n"
+      "{{NPC_PATHS_CODE}}\n"
+      "// [[ED_PROCESSES_END]]\n"
+      "\n"
+      "// [[USER_PROCESSES_START]]\n"
+      "// [[USER_PROCESSES_END]]\n"
+      "\n"
+      "// ---------------------------------------------------------\n"
+      "// RECURSOS Y FUNCIONES DINÁMICAS\n"
+      "// ----------------─----------------------------------------\n"
+      "// [[ED_RESOURCES_START]]\n"
+      "{{INLINE_RESOURCES}}\n"
+      "// [[ED_RESOURCES_END]]\n"
+      "\n"
+      "// ---------------------------------------------------------\n"
+      "// VARIABLES GLOBALES\n"
+      "// ---------------------------------------------------------\n"
+      "GLOBAL\n"
+      "    // [[ED_GLOBAL_START]]\n"
+      "    int screen_w;\n"
+      "    int screen_h;\n"
+      "    int move_speed;\n"
+      "    int rot_speed;\n"
+      "    // [[ED_GLOBAL_END]]\n"
+      "\n"
+      "    // [[USER_GLOBAL_START]]\n"
+      "    // [[USER_GLOBAL_END]]\n"
+      "END\n"
+      "\n"
+      "// --------------------------------─------------------------\n"
+      "// PROGRAMA PRINCIPAL\n"
+      "// ---------------------------------------------------------\n"
+      "PROCESS main()\n"
+      "BEGIN\n"
+      "    // [[ED_INIT_START]]\n"
+      "    screen_w = {{SCREEN_WIDTH}};\n"
+      "    screen_h = {{SCREEN_HEIGHT}};\n"
+      "    move_speed = 8000;\n"
+      "    rot_speed = 2000;\n"
+      "    \n"
+      "    say(\"--- \" + \"{{PROJECT_NAME}}\" + \" START ---\");\n"
+      "    set_mode(screen_w, screen_h, {{FULLSCREEN_MODE}});\n"
+      "    set_fps({{FPS}}, 0);\n"
+      "    \n"
+      "    // Audio\n"
+      "    sound.freq = 44100;\n"
+      "    sound.channels = 32;\n"
+      "    soundsys_init();\n"
+      "    \n"
+      "    // Cargar recursos e inicializar rutas\n"
+      "    load_project_resources();\n"
+      "    npc_paths_init();\n"
+      "    // [[ED_INIT_END]]\n"
+      "\n"
+      "    // [[USER_INIT_START]]\n"
+      "    // [[USER_INIT_END]]\n"
+      "\n"
+      "    // [[ED_SPAWN_START]]\n"
+      "    {{STARTUP_SCENE}}();\n"
+      "    // [[ED_SPAWN_END]]\n"
+      "\n"
+      "    LOOP\n"
+      "        // [[ED_MAIN_LOOP_START]]\n"
+      "        if (key(_esc)) exit(); end\n"
+      "        // {{MOVEMENT_LOGIC}}\n"
+      "        // [[ED_MAIN_LOOP_END]]\n"
+      "\n"
+      "        // [[USER_MAIN_LOOP_START]]\n"
+      "        // [[USER_MAIN_LOOP_END]]\n"
+      "        \n"
+      "        FRAME;\n"
+      "    END\n"
+      "END\n");
 }
 
 QString CodeGenerator::getPlayerTemplate() {
@@ -218,28 +255,51 @@ QString CodeGenerator::getEnemyTemplate() {
 }
 
 QString CodeGenerator::generateMainPrgWithEntities(
-    const QVector<EntityInstance> &entities) {
+    const QVector<EntityInstance> &entities, const QVector<NPCPath> &npcPaths) {
   if (m_projectData.name.isEmpty()) {
     qWarning() << "No project data set for code generation";
     return "";
   }
 
-  // Generate entity declarations
+  // Basic project variables
+  setVariable("PROJECT_NAME", m_projectData.name);
+  setVariable("DATE",
+              QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"));
+  setVariable("SCREEN_WIDTH", QString::number(m_projectData.screenWidth));
+  setVariable("SCREEN_HEIGHT", QString::number(m_projectData.screenHeight));
+  setVariable("FPS", QString::number(m_projectData.fps));
+  setVariable("FULLSCREEN_MODE",
+              m_projectData.fullscreen ? "MODE_FULLSCREEN" : "MODE_WINDOW");
+
+  // Entity Declarations (Legacy or for extra info)
   QString entityDeclarations =
       ProcessGenerator::generateDeclarationsSection(entities);
   setVariable("ENTITY_DECLARATIONS", entityDeclarations);
 
-  // Generate entity processes (Inline instead of includes)
+  // Generate entity processes (Inline code)
   QString wrapperOpen = m_variables.value("ASSET_WRAPPER_OPEN", "");
   QString wrapperClose = m_variables.value("ASSET_WRAPPER_CLOSE", "");
   QString entityProcesses = ProcessGenerator::generateAllProcessesCode(
       entities, wrapperOpen, wrapperClose);
   setVariable("ENTITY_PROCESSES", entityProcesses);
-  setVariable("ENTITY_INCLUDES", ""); // Clear old variable for safety
+
+  // Generate NPC Paths code
+  QString npcPathsCode = ProcessGenerator::generateNPCPathsCode(npcPaths);
+  setVariable("NPC_PATHS_CODE", npcPathsCode);
+
+  // Combine all inlined code (Resources, Scenes, Commons)
+  QString allInlinedCode =
+      m_inlineCommons + "\n" + m_inlineResources + "\n" + m_inlineScenes;
+  setVariable("INLINE_RESOURCES", allInlinedCode);
 
   // Generate spawn calls
   QString spawnCalls = ProcessGenerator::generateSpawnCalls(entities);
   setVariable("SPAWN_ENTITIES", spawnCalls);
+
+  // Default scene if not set
+  if (m_variables.value("STARTUP_SCENE").isEmpty()) {
+    setVariable("STARTUP_SCENE", "intro"); // Default
+  }
 
   // Determine movement logic
   bool hasPlayer = false;
@@ -252,24 +312,21 @@ QString CodeGenerator::generateMainPrgWithEntities(
 
   QString movement;
   if (hasPlayer) {
-    movement = "        // Movimiento por entidad (Jugador detectado)\n";
-    movement += "        RAY_CAMERA_UPDATE(0.017);";
+    movement = "// Movimiento asistido por cámara\n"
+               "        RAY_CAMERA_UPDATE(0.017);";
   } else {
-    movement = "        // Movimiento libre de cámara\n"
+    movement = "// Movimiento manual de cámara\n"
                "        if (key(_w)) RAY_MOVE_FORWARD(move_speed); end\n"
                "        if (key(_s)) RAY_MOVE_BACKWARD(move_speed); end\n"
                "        if (key(_a)) RAY_STRAFE_LEFT(move_speed); end\n"
                "        if (key(_d)) RAY_STRAFE_RIGHT(move_speed); end\n"
                "        if (key(_left)) RAY_ROTATE(-rot_speed); end\n"
                "        if (key(_right)) RAY_ROTATE(rot_speed); end\n"
-               "        if (key(_up)) RAY_LOOK_UP_DOWN(pitch_speed); end\n"
-               "        if (key(_down)) RAY_LOOK_UP_DOWN(-pitch_speed); end\n"
                "        RAY_CAMERA_UPDATE(0.017);";
   }
   setVariable("MOVEMENT_LOGIC", movement);
 
-  QString template_text = getMainTemplate();
-  return processTemplate(template_text);
+  return processTemplate(getMainTemplate());
 }
 
 QString CodeGenerator::generateEntityModel(const QString &processName,
@@ -313,11 +370,11 @@ QString CodeGenerator::getCameraControllerTemplate() {
       "import \"libmod_math\";\n"
       "\n"
       "TYPE CameraKeyframe\n"
-      "    float x, y, z;\n"
-      "    float yaw, pitch, roll;\n"
-      "    float fov;\n"
-      "    float time;\n"
-      "    float duration;\n"
+      "    double x, y, z;\n"
+      "    double yaw, pitch, roll;\n"
+      "    double fov;\n"
+      "    double time;\n"
+      "    double duration;\n"
       "    int easeIn, easeOut;\n"
       "end\n"
       "\n"
@@ -410,207 +467,51 @@ QString CodeGenerator::generateCameraPathData(const QString &pathName,
 }
 
 QString CodeGenerator::patchMainPrg(const QString &existingCode,
-                                    const QVector<EntityInstance> &entities) {
-  QString newFullCode = generateMainPrgWithEntities(entities);
+                                    const QVector<EntityInstance> &entities,
+                                    const QVector<NPCPath> &npcPaths) {
+  // 1. Generate clean code from Mega Template
+  QString result = generateMainPrgWithEntities(entities, npcPaths);
 
-  QString result = existingCode;
-  auto replaceBlock = [&](const QString &startMarker, const QString &endMarker,
-                          bool protectIfHasContent = false) {
-    int newStart = newFullCode.indexOf(startMarker);
-    int newEND = newFullCode.indexOf(endMarker);
-    if (newStart == -1 || newEND == -1)
-      return;
-    newEND += endMarker.length();
-    QString newBlock = newFullCode.mid(newStart, newEND - newStart);
+  // 2. Map of blocks to preserve (User sections)
+  // These are the areas where the user can legally write their own code
+  QStringList userSections = {"USER_IMPORTS",   "USER_CONSTANTS",
+                              "USER_PROCESSES", "USER_GLOBAL",
+                              "USER_INIT",      "USER_MAIN_LOOP"};
 
-    int oldStart = result.indexOf(startMarker);
-    int oldEND = result.indexOf(endMarker);
-    if (oldStart != -1 && oldEND != -1) {
-      if (protectIfHasContent) {
-        int contentStart = oldStart + startMarker.length();
-        QString existingContent =
-            result.mid(contentStart, oldEND - contentStart).trimmed();
-        if (existingContent.length() > 10) {
-          return; // Skip - user has code here
-        }
-      }
+  for (const QString &section : userSections) {
+    QString startTag = "// [[" + section + "_START]]";
+    QString endTag = "// [[" + section + "_END]]";
 
-      oldEND += endMarker.length();
-      result.replace(oldStart, oldEND - oldStart, newBlock);
-    }
-  };
+    int oldStart = existingCode.indexOf(startTag);
+    int oldEnd = existingCode.indexOf(endTag);
 
-  replaceBlock("// [[ED_CONSTANTS_START]]", "// [[ED_CONSTANTS_END]]");
-  replaceBlock("// [[ED_DECLARATIONS_START]]", "// [[ED_DECLARATIONS_END]]");
-  replaceBlock("// [[ED_CONTROL_START]]", "// [[ED_CONTROL_END]]");
-  replaceBlock("// [[ED_SPAWN_START]]", "// [[ED_SPAWN_END]]");
-  replaceBlock("// [[ED_PROCESSES_START]]", "// [[ED_PROCESSES_END]]",
-               true); // NEVER overwrite if has content
-  replaceBlock("// [[ED_STARTUP_SCENE_START]]", "// [[ED_STARTUP_SCENE_END]]");
+    if (oldStart != -1 && oldEnd != -1 && oldStart < oldEnd) {
+      // Extract user content from existing file
+      int contentStart = oldStart + startTag.length();
+      QString userContent =
+          existingCode.mid(contentStart, oldEnd - contentStart);
 
-  // --- CLEANUP OLD INLINE CODE ---
-  // Remove old get_asset_path if it exists as inline function (now in
-  // scene_commons.prg)
-  int funcPos = result.indexOf("function string get_asset_path");
-  if (funcPos != -1) {
-    int firstEnd = result.indexOf("end", funcPos);
-    if (firstEnd != -1) {
-      int secondEnd = result.indexOf("end", firstEnd + 3);
-      if (secondEnd != -1) {
-        result.remove(funcPos, (secondEnd + 3) - funcPos);
-      } else {
-        int nextBegin = result.indexOf("begin", funcPos);
-        if (nextBegin != -1)
-          result.remove(funcPos, nextBegin - funcPos);
-      }
-    }
-  }
+      // Only inject if it's not just whitespace and comments
+      if (userContent.trimmed().length() > 0) {
+        int newStart = result.indexOf(startTag);
+        int newEnd = result.indexOf(endTag);
 
-  // Ensure resources are initialized in main() specifically
-  if (!result.contains("load_project_resources")) {
-    int mainPos = result.indexOf("process main()");
-    if (mainPos != -1) {
-      int beginPos = result.indexOf("begin", mainPos);
-      if (beginPos != -1) {
-        int nextLine = result.indexOf("\n", beginPos);
-        if (nextLine != -1) {
-          QString initCode = "    // Inicializar sistema de audio\n"
-                             "    sound.freq = 44100;\n"
-                             "    sound.channels = 32;\n"
-                             "    int audio_status = soundsys_init();\n"
-                             "    say(\"AUDIO: Status \" + audio_status + \" "
-                             "(\" + getenv(\"SDL_AUDIODRIVER\") + \")\");\n"
-                             "    reserve_channels(24);\n"
-                             "    load_project_resources();\n";
-          result.insert(nextLine + 1, initCode);
+        if (newStart != -1 && newEnd != -1) {
+          int replaceStart = newStart + startTag.length();
+          result.replace(replaceStart, newEnd - replaceStart, userContent);
         }
       }
     }
-  } else if (!result.contains("soundsys_init")) {
-    int resPos = result.indexOf("load_project_resources");
-    if (resPos != -1) {
-      result.insert(resPos,
-                    "sound.freq = 44100;\n    sound.channels = 32;\n    "
-                    "soundsys_init();\n    reserve_channels(24);\n    ");
-    }
   }
 
-  // Ensure sound module is present if music might be used
-  if (!result.contains("import \"libmod_sound\"")) {
-    int pos = result.lastIndexOf("import \"");
-    if (pos != -1) {
-      int endPos = result.indexOf(";", pos);
-      if (endPos != -1)
-        result.insert(endPos + 1, "\nimport \"libmod_sound\";");
-    }
-  }
-
-  // AGGRESSIVE FIX: Clean injection logic
-  QString monolithicBlock;
-  monolithicBlock += "// [[INLINED_CODE_START]]\n";
-  if (!m_inlineCommons.isEmpty())
-    monolithicBlock += m_inlineCommons + "\n";
-  if (!m_inlineResources.isEmpty())
-    monolithicBlock += m_inlineResources + "\n";
-  if (!m_inlineScenes.isEmpty())
-    monolithicBlock += m_inlineScenes + "\n";
-  monolithicBlock += "// [[INLINED_CODE_END]]\n";
-
-  QString cleanCode;
-  QStringList originalLines = result.split('\n');
-  bool skipping = false;
-  bool inlinedFound = false;
-
-  // 1. Keep imports and non-inlined code
-  for (const QString &line : originalLines) {
-    QString trimmed = line.trimmed();
-    if (trimmed == "// [[INLINED_CODE_START]]") {
-      skipping = true;
-      if (!inlinedFound) {
-        cleanCode += monolithicBlock;
-        inlinedFound = true;
-      }
-      continue;
-    }
-    if (trimmed == "// [[INLINED_CODE_END]]") {
-      skipping = false;
-      continue;
-    }
-    if (skipping)
-      continue;
-
-    // Check for legacy includes we want to remove
-    if (trimmed.startsWith("include \"includes/"))
-      continue;
-
-    // Avoid double-empty lines
-    if (trimmed.isEmpty() && cleanCode.endsWith("\n\n"))
-      continue;
-
-    cleanCode += line + "\n";
-  }
-
-  // 2. If no inlined block was found, insert it after imports or at top
-  if (!inlinedFound) {
-    int lastImport = cleanCode.lastIndexOf("import \"");
-    if (lastImport != -1) {
-      int endOfLine = cleanCode.indexOf("\n", lastImport);
-      cleanCode.insert(endOfLine + 1, "\n" + monolithicBlock + "\n");
-    } else {
-      cleanCode.prepend(monolithicBlock + "\n");
-    }
-  }
-
-  // 3. Ensure essential imports are present
-  QStringList essentialImports = {"libmod_gfx", "libmod_input", "libmod_misc",
-                                  "libmod_ray", "libmod_sound"};
-  for (const QString &imp : essentialImports) {
-    if (!cleanCode.contains("import \"" + imp + "\"")) {
-      cleanCode.prepend("import \"" + imp + "\";\n");
-    }
-  }
-
-  // 4. Ensure essential audio/resource calls in main()
-  if (!cleanCode.contains("load_project_resources")) {
-    int mainStart = cleanCode.indexOf("process main()");
-    if (mainStart != -1) {
-      int beginPos = cleanCode.indexOf("begin", mainStart);
-      if (beginPos != -1) {
-        cleanCode.insert(cleanCode.indexOf("\n", beginPos) + 1,
-                         "    load_project_resources();\n");
-      }
-    }
-  }
-
-  // 5. Final Safety Check: Ensure process main() exists
-  if (!cleanCode.contains("process main()")) {
-    cleanCode += "\n// Safety Fallback: Main Process\n";
-    cleanCode += "process main()\n";
-    cleanCode += "begin\n";
-    cleanCode += "    load_project_resources();\n";
-    cleanCode += "    // [[ED_STARTUP_SCENE_START]]\n";
-    QString startScene = m_variables.value("STARTUP_SCENE");
-    if (!startScene.isEmpty() && !startScene.contains("//"))
-      cleanCode += "    " + startScene + "();\n";
-    else
-      cleanCode +=
-          "    if (exists(type scene1)) scene1(); end\n"; // Intelligent try
-    cleanCode += "    // [[ED_STARTUP_SCENE_END]]\n";
-    cleanCode += "    loop\n";
-    cleanCode += "        if (key(_esc)) exit(\"\", 0); end\n";
-    cleanCode += "        frame;\n";
-    cleanCode += "    end\n";
-    cleanCode += "end\n";
-  }
-
-  return cleanCode;
+  return result;
 }
 
 // ----------------------------------------------------------------------------
 // 2D SCENE GENERATION
 // ----------------------------------------------------------------------------
 
-static bool loadSceneJson(const QString &path, SceneData &data) {
+bool CodeGenerator::loadSceneJson(const QString &path, SceneData &data) {
   QFile file(path);
   if (!file.open(QIODevice::ReadOnly))
     return false;
@@ -633,6 +534,9 @@ static bool loadSceneJson(const QString &path, SceneData &data) {
   data.musicFile = root["musicFile"].toString();
   data.musicLoop = root["musicLoop"].toBool(true);
 
+  data.timeout = root["timeout"].toInt(0);
+  data.nextScene = root["nextScene"].toString();
+
   QJsonArray entitiesArray = root["entities"].toArray();
   for (const QJsonValue &val : entitiesArray) {
     QJsonObject obj = val.toObject();
@@ -642,7 +546,7 @@ static bool loadSceneJson(const QString &path, SceneData &data) {
     ent->name = obj["name"].toString();
     ent->x = obj["x"].toDouble();
     ent->y = obj["y"].toDouble();
-    ent->z = obj["z"].toInt();
+    ent->z = obj["z"].toDouble();
     ent->angle = obj["angle"].toDouble();
     ent->scale = obj["scale"].toDouble(1.0);
     ent->scaleX = obj["scaleX"].toDouble(ent->scale);
@@ -661,6 +565,8 @@ static bool loadSceneJson(const QString &path, SceneData &data) {
       if (obj.contains("fontFile")) {
         ent->fontFile = obj["fontFile"].toString();
       }
+    } else if (ent->type == ENTITY_WORLD3D) {
+      ent->sourceFile = obj["sourceFile"].toString();
     }
 
     // Visual Item (NONE) in generator
@@ -672,12 +578,32 @@ static bool loadSceneJson(const QString &path, SceneData &data) {
   return true;
 }
 
+QString CodeGenerator::generateUserLogicStubs(const QStringList &processNames) {
+  QString code =
+      "// USER LOGIC - Edit this file to add custom behaviors\n"
+      "// These hooks are called by the auto-generated processes\n\n";
+
+  for (const QString &name : processNames) {
+    QString lowerName = name.toLower();
+    code += QString("// Hooks for %1\n").arg(lowerName);
+    code +=
+        QString("function hook_%1_init(int p_id)\nbegin\n    // Called when "
+                "entity is spawned\nend\n\n")
+            .arg(lowerName);
+    code += QString("function hook_%1_update(int p_id)\nbegin\n    // Called "
+                    "every frame\nend\n\n")
+                .arg(lowerName);
+  }
+
+  return code;
+}
+
 QString CodeGenerator::generateScenePrg(const QString &sceneName,
                                         const SceneData &data,
                                         const QString &interactionMapPath,
                                         const QString &existingCode) {
   QString code;
-  code += QString("process %1()\n").arg(sceneName);
+  code += QString("process scene_%1()\n").arg(sceneName);
   code += "private\n    int ent_id;\n    string w_title;\n";
 
   QString userSetup, userLoop;
@@ -708,93 +634,63 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   }
 
   code += "begin\n";
-  code += "    // 1. Radical Cleanup: Ensure we are the only process running\n";
+  code += "    // Cleanup: Ensure we are the only process running\n";
   code += "    let_me_alone();\n";
-  code += "    // Wait a frame to ensure cleanup propagates if needed "
-          "(sometimes safe)\n";
+  code += "    // Wait a frame to ensure cleanup propagates\n";
   code += "    frame;\n\n";
+
+  code += "    // Load global resources (only loads if not already loaded)\n";
+  code += "    load_project_resources();\n\n";
 
   code += "    // Scene Setup\n";
   code +=
       QString("    set_mode(%1, %2, 32);\n").arg(data.width).arg(data.height);
 
-  // Load Resources
+  // Build a resMap that maps resource files to their global variable names
+  // (matching the names generated in generateAllScenes section 3)
   QMap<QString, QString> resMap;
   QSet<QString> loadedResources;
   for (const auto &ent : data.entities) {
-    if (ent->sourceFile.isEmpty())
-      continue;
-    if (loadedResources.contains(ent->sourceFile))
-      continue;
-
-    QString ext = QFileInfo(ent->sourceFile).suffix().toLower();
-    QString safeName = QFileInfo(ent->sourceFile).fileName().replace(".", "_");
-    safeName.replace("-", "_").replace(" ", "_");
-    QString resVar = "res_" + safeName;
-
-    if (ext == "fpg") {
-      code += QString("    int %1 = fpg_load(\"%2\");\n")
-                  .arg(resVar)
-                  .arg(ent->sourceFile);
-    } else if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "tga" ||
-               ext == "bmp") {
-      code += QString("    int %1 = map_load(\"%2\");\n")
-                  .arg(resVar)
-                  .arg(ent->sourceFile);
-    } else {
-      continue;
+    if (!ent->sourceFile.isEmpty() &&
+        !loadedResources.contains(ent->sourceFile)) {
+      QString cleanName = QFileInfo(ent->sourceFile).baseName().toLower();
+      cleanName = cleanName.replace(".", "_").replace(" ", "_");
+      QString ext = QFileInfo(ent->sourceFile).suffix().toLower();
+      QString varName = "id_" + cleanName + "_" + ext;
+      resMap[ent->sourceFile] = varName;
+      loadedResources.insert(ent->sourceFile);
     }
-    resMap[ent->sourceFile] = resVar;
-    loadedResources.insert(ent->sourceFile);
+    if (!ent->fontFile.isEmpty() && !loadedResources.contains(ent->fontFile)) {
+      QString cleanName = QFileInfo(ent->fontFile).baseName().toLower();
+      cleanName = cleanName.replace(".", "_").replace(" ", "_");
+      QString ext = QFileInfo(ent->fontFile).suffix().toLower();
+      QString varName = "id_" + cleanName + "_" + ext;
+      resMap[ent->fontFile] = varName;
+      loadedResources.insert(ent->fontFile);
+    }
   }
-
-  // Load Fonts
-  for (const auto &ent : data.entities) {
-    if (ent->type != ENTITY_TEXT || ent->fontFile.isEmpty())
-      continue;
-    if (loadedResources.contains(ent->fontFile))
-      continue;
-
-    QString cleanFontName =
-        QFileInfo(ent->fontFile).baseName().replace(" ", "_").replace("-", "_");
-    QString resVar = "fnt_" + cleanFontName;
-    code += QString("    int %1 = fnt_load(\"%2\");\n")
-                .arg(resVar)
-                .arg(ent->fontFile);
-    resMap[ent->fontFile] = resVar;
-    loadedResources.insert(ent->fontFile);
-  }
-
-  // Load Music
   if (!data.musicFile.isEmpty() && !loadedResources.contains(data.musicFile)) {
-    QString safeName = QFileInfo(data.musicFile)
-                           .fileName()
-                           .replace(".", "_")
-                           .replace(" ", "_")
-                           .replace("-", "_");
-    QString resVar = "mus_" + safeName;
-    code += QString("    int %1 = music_load(\"%2\");\n")
-                .arg(resVar)
-                .arg(data.musicFile);
-    resMap[data.musicFile] = resVar;
+    QString cleanName = QFileInfo(data.musicFile).baseName().toLower();
+    cleanName = cleanName.replace(".", "_").replace(" ", "_");
+    QString ext = QFileInfo(data.musicFile).suffix().toLower();
+    QString varName = "id_" + cleanName + "_" + ext;
+    resMap[data.musicFile] = varName;
     loadedResources.insert(data.musicFile);
   }
+  if (!data.cursorFile.isEmpty() &&
+      !loadedResources.contains(data.cursorFile)) {
+    QString cleanName = QFileInfo(data.cursorFile).baseName().toLower();
+    cleanName = cleanName.replace(".", "_").replace(" ", "_");
+    QString ext = QFileInfo(data.cursorFile).suffix().toLower();
+    QString varName = "id_" + cleanName + "_" + ext;
+    resMap[data.cursorFile] = varName;
+    loadedResources.insert(data.cursorFile);
+  }
 
-  // Set Cursor
+  // Set Cursor (using global resource variable)
   if (!data.cursorFile.isEmpty()) {
     QString ext = QFileInfo(data.cursorFile).suffix().toLower();
-    QString resVar = resMap.value(data.cursorFile);
-    if (resVar.isEmpty()) {
-      resVar = "mouse_graph";
-      if (ext == "fpg")
-        code += QString("    int %1 = fpg_load(\"%2\");\n")
-                    .arg(resVar)
-                    .arg(data.cursorFile);
-      else
-        code += QString("    int %1 = map_load(\"%2\");\n")
-                    .arg(resVar)
-                    .arg(data.cursorFile);
-    }
+    QString resVar = resMap.value(data.cursorFile, "0");
     if (ext == "fpg") {
       code += QString("    mouse.file = %1;\n").arg(resVar);
       code += QString("    mouse.graph = %1;\n").arg(data.cursorGraph);
@@ -805,10 +701,6 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   } else {
     code += "    mouse.graph = 0; // System cursor\n";
   }
-
-  // Cleanup Previous Scene (Critical)
-  code += "    // Clean up previous scene\n";
-  code += "    let_me_alone();\n";
   code += "\n";
 
   // Music Playback
@@ -887,51 +779,47 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
       }
 
       // Text Entity Logic
-      // If it has onClick, we generate a dedicated Auto_Btn process!
+      // ALWAYS generate a dedicated Auto_Btn process for text to ensure
+      // Z-ordering (-500) works independent of the main 3D world process
+      // (Z=1000).
+
+      // Use scene name + unique index to allow multiple scenes with buttons
+      QString btnProcName =
+          QString("Auto_Btn_%1_%2").arg(sceneName).arg(currentInteractiveIdx++);
+      // Sanitize name to be a valid identifier
+      btnProcName =
+          btnProcName.replace(" ", "_").replace("-", "_").replace(".", "_");
+
+      code += QString("    // Text Button: %1\n").arg(ent->name);
+      // Pass the font ID (variable name) as argument
+      code += QString("    %1(%2);\n").arg(btnProcName).arg(fontId);
+
+      QString btnCode;
+      // Process updates to accept font_id
+      btnCode += QString("process %1(int font_id)\n").arg(btnProcName);
+      btnCode += "PRIVATE\n";
+      btnCode += "    int txt_id;\n";
+      btnCode += "    int w, h;\n";
+      btnCode += "    int my_x, my_y;\n";
+      btnCode += "begin\n";
+      btnCode += QString("    my_x = %1; my_y = %2;\n")
+                     .arg(int(ent->x))
+                     .arg(int(ent->y));
+      btnCode += "    z = -500;\n"; // Force foreground
+      // Note: write returns the text ID
+      btnCode +=
+          QString("    txt_id = write(font_id, my_x, my_y, %1, \"%2\");\n")
+              .arg(ent->alignment)
+              .arg(ent->text);
+      btnCode +=
+          QString("    w = text_width(font_id, \"%1\");\n").arg(ent->text);
+      btnCode +=
+          QString("    h = text_height(font_id, \"%1\");\n").arg(ent->text);
+      btnCode += "    loop\n";
+
+      // Only generate click logic if there is an action or a destination
       if (!ent->onClick.isEmpty()) {
-        // Use scene name + unique index to allow multiple scenes with buttons
-        QString btnProcName = QString("Auto_Btn_%1_%2")
-                                  .arg(sceneName)
-                                  .arg(currentInteractiveIdx++);
-        // Sanitize name to be a valid identifier
-        btnProcName =
-            btnProcName.replace(" ", "_").replace("-", "_").replace(".", "_");
-
-        code += QString("    // Text Button: %1\n").arg(ent->name);
-        // Pass the font ID (variable name) as argument
-        code += QString("    %1(%2);\n").arg(btnProcName).arg(fontId);
-
-        // Generate the process in commons or at end of file?
-        // We'll append it to m_inlineCommons for now or a new m_inlineScenes
-        // section. Better: Append to m_inlineScenes, but as a separate process
-        // block.
-
-        QString btnCode;
-        // Process updates to accept font_id
-        btnCode += QString("process %1(int font_id)\n").arg(btnProcName);
-        btnCode += "PRIVATE\n";
-        btnCode += "    int txt_id;\n";
-        btnCode += "    int w, h;\n";
-        btnCode += "    int my_x, my_y;\n";
-        btnCode += "begin\n";
-        btnCode += QString("    my_x = %1; my_y = %2;\n")
-                       .arg(int(ent->x))
-                       .arg(int(ent->y));
-        // Note: write returns the text ID
-        btnCode +=
-            QString("    txt_id = write(font_id, my_x, my_y, %1, \"%2\");\n")
-                .arg(ent->alignment)
-                .arg(ent->text);
-        btnCode +=
-            QString("    w = text_width(font_id, \"%1\");\n").arg(ent->text);
-        btnCode +=
-            QString("    h = text_height(font_id, \"%1\");\n").arg(ent->text);
-        btnCode += "    loop\n";
         // Logic based on Alignment for Hitbox Check
-        // Align 0 (Left): x to x+w
-        // Align 1 (Center): x-w/2 to x+w/2
-        // Align 2 (Right): x-w to x
-
         QString xCondition;
         if (ent->alignment == 1) // Center
           xCondition = "mouse.x > (my_x - w/2) AND mouse.x < (my_x + w/2)";
@@ -946,40 +834,147 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
         btnCode += "            // Click Detected\n";
         btnCode += "            while(mouse.left) frame; end // Wait release\n";
         btnCode += QString("            %1\n").arg(ent->onClick); // User Action
-        // After action, if scene changes, this process dies via let_me_alone in
-        // next scene. But if action is just logic, we continue loop.
         btnCode += "        end\n";
-        btnCode += "        frame;\n";
-        btnCode += "    end\n"; // End Loop
-        btnCode += "OnExit:\n";
-        btnCode += "    write_delete(txt_id);\n";
-        btnCode += "end\n\n";
-
-        m_inlineScenes += btnCode; // Append this process to the file
-
-      } else {
-        // Static Text (No interaction)
-        code += QString("    // Text Entity: %1\n").arg(ent->name);
-        code += QString("    write(%1, %2, %3, %4, \"%5\");\n")
-                    .arg(fontId)
-                    .arg(int(ent->x))
-                    .arg(int(ent->y))
-                    .arg(ent->alignment)
-                    .arg(ent->text);
       }
+
+      btnCode += "        frame;\n";
+      btnCode += "    end\n"; // End Loop
+      btnCode += "OnExit:\n";
+      btnCode += "    write_delete(txt_id);\n";
+      btnCode += "end\n\n";
+
+      m_inlineScenes += btnCode; // Append this process to the file
 
     } else if (ent->type == ENTITY_WORLD3D) {
       code += QString("\n    // 3D World Hybrid Entity: %1\n").arg(ent->name);
       code += "    RAY_SHUTDOWN();\n";
-      code += "    RAY_INIT(640, 480, 70, 1);\n";
+      code += QString("    RAY_INIT(%1, %2, 70, 1);\n")
+                  .arg(data.width)
+                  .arg(data.height);
       QString mapPath = ent->sourceFile;
       if (mapPath.contains("assets/"))
         mapPath = mapPath.mid(mapPath.indexOf("assets/"));
 
-      code += QString("    if (RAY_LOAD_MAP(\"%1\", 0) == 0) say(\"Error "
+      // Auto-load FPG textures (Assumed to be in assets/fpg/ with same name)
+      QString fpgPath = "assets/fpg/" + QFileInfo(mapPath).baseName() + ".fpg";
+      code += QString("    int fpg_map = fpg_load(\"%1\");\n").arg(fpgPath);
+      code +=
+          "    if (fpg_map == 0) say(\"Warning: FPG texture file not found: " +
+          fpgPath + "\"); end\n";
+
+      code += QString("    if (RAY_LOAD_MAP(\"%1\", fpg_map) == 0) say(\"Error "
                       "loading hybrid 3D Map\"); end\n")
                   .arg(mapPath);
-      code += "    ray_display();\n\n";
+
+      // --- Auto-Spawn Entities from Map ---
+      MapData internalData;
+      RayMapFormat loader;
+      // We need the full path to read the file NOW (during code generation)
+      // Resolve absolute path for loading
+      QString fullPath = ent->sourceFile;
+      QFileInfo fi(fullPath);
+      if (!fi.isAbsolute() && !m_projectData.path.isEmpty()) {
+        fullPath = m_projectData.path + "/" + fullPath;
+      }
+
+      if (loader.loadMap(fullPath, internalData, nullptr)) {
+        // Processes for these entities are now handled by autogen_entities.prg
+        // via a centralized scan during project generation.
+
+        if (!internalData.entities.isEmpty()) {
+          code += "    // Spawning Map Entities (Auto-generated)\n";
+          // Declare generic ID variable for spawns
+          code += "    int spawn_ent_id;\n";
+          code += "    int player_id = 0;\n";
+
+          for (const auto &mapEnt : internalData.entities) {
+            QString procName = mapEnt.processName;
+
+            // Fallback if process name is empty (use asset name)
+            if (procName.isEmpty()) {
+              QFileInfo assetInfo(mapEnt.assetPath);
+              procName = assetInfo.baseName();
+            }
+            if (procName.isEmpty())
+              procName = "UnknownEntity";
+
+            // Sanitize name
+            procName =
+                procName.replace(" ", "_").replace("-", "_").replace(".", "_");
+
+            // Generate Process Call
+            // Assumptions: Process(x, y, z, angle)
+            // Note: mapEnt.cameraRotation is float. Passing as argument.
+            code += QString("    spawn_ent_id = %1(%2, %3, %4, %5);\n")
+                        .arg(procName)
+                        .arg(mapEnt.x)
+                        .arg(mapEnt.y)
+                        .arg(mapEnt.z)
+                        .arg(mapEnt.cameraRotation);
+
+            // --- Handle Behaviors ---
+            code += "    if (spawn_ent_id > 0)\n";
+
+            // Player Flag
+            if (mapEnt.isPlayer) {
+              code += "        // Is Player\n";
+              // Assuming 'player_id' is a global or common var in game project
+              code += "        player_id = spawn_ent_id;\n";
+            }
+
+            // Camera Follow
+            if (mapEnt.cameraFollow) {
+              code += "        // Camera Follow\n";
+              // Assuming standard Ray function or custom helper
+              code += QString("        // RAY_CAM_SET_TARGET(spawn_ent_id, %1, "
+                              "%2, %3);\n")
+                          .arg(mapEnt.cameraOffset_x)
+                          .arg(mapEnt.cameraOffset_y)
+                          .arg(mapEnt.cameraOffset_z);
+              // Use a generic Ray function if known, or leave as comment for
+              // user to uncomment/implement
+            }
+
+            // Control Type (Pass as Setup call?)
+            if (mapEnt.controlType != EntityInstance::CONTROL_NONE) {
+              code += QString("        // Control Type: %1\n")
+                          .arg(mapEnt.controlType);
+            }
+
+            code += "    end\n";
+          }
+          code += "\n";
+        }
+      } else {
+        // Optional warning in generated code comment
+        code += QString("    // Warning: Could not read map file to spawn "
+                        "entities: %1\n")
+                    .arg(ent->sourceFile);
+      }
+
+      // Replace generic ray_display() with our dedicated renderer process
+      code += QString("    Ray_Renderer_Process(%1, %2);\n\n")
+                  .arg(data.width)
+                  .arg(data.height);
+
+      // Inject the process definition
+      QString rendererCode;
+      rendererCode += "process Ray_Renderer_Process(int w, int h)\n";
+      rendererCode += "begin\n";
+      rendererCode += "    // Create rendering surface\n";
+      rendererCode += "    graph = map_new(w, h, 32);\n";
+      rendererCode += "    x = w / 2;\n";
+      rendererCode += "    y = h / 2;\n";
+      rendererCode += "    z = 1000; // Force 3D background depth\n";
+      rendererCode += "    loop\n";
+      rendererCode += "        RAY_RENDER(graph);\n";
+      rendererCode += "        frame;\n";
+      rendererCode += "    end\n";
+      rendererCode += "OnExit:\n";
+      rendererCode += "    if (graph > 0) map_unload(0, graph); end\n";
+      rendererCode += "end\n\n";
+
+      m_inlineScenes += rendererCode;
     }
   }
 
@@ -989,10 +984,19 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   // Loop Logic
   code += "    int mouse_last_state = 0;\n";
   code += "    int scene_exit = 0;\n";
+  if (data.timeout > 0 && !data.nextScene.isEmpty()) {
+    code += "    int scene_timer = 0;\n";
+  }
   code += "    loop\n";
   code += "        if (scene_exit) break; end\n";
   if (data.exitOnEsc) {
     code += "        if (key(_esc)) exit(\"\", 0); end\n";
+  }
+  if (data.timeout > 0 && !data.nextScene.isEmpty()) {
+    code += QString("        scene_timer++;\n");
+    code += QString("        if (scene_timer > %1) goto_scene(\"%2\"); end\n")
+                .arg(data.timeout * 60)
+                .arg(data.nextScene);
   }
 
   // 100% Robust Click Detection (No interaction map needed)
@@ -1194,8 +1198,9 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
   // ---------------------------------------------------------
   // 2. COLLECT RESOURCES & GENERATE SCENES
   // ---------------------------------------------------------
+  // 2. COLLECT RESOURCES & GENERATE SCENES
   QStringList filters;
-  filters << "*.scn";
+  filters << "*.scn" << "*.scene";
 
   QSet<QString> processedBaseNames;
   QSet<QString> allProjectResources = extraResources;
@@ -1304,16 +1309,17 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
   if (!sceneNames.isEmpty()) {
     bool found = false;
     for (const QString &sn : sceneNames) {
-      if (sn.toLower() == currentStart.toLower()) {
+      if (sn.toLower() == currentStart.toLower() ||
+          ("scene_" + sn.toLower()) == currentStart.toLower()) {
         found = true;
-        // Ensure exact casing matches process name
-        setVariable("STARTUP_SCENE", sn);
+        // Ensure exact casing matches process name with prefix
+        setVariable("STARTUP_SCENE", "scene_" + sn.toLower());
         break;
       }
     }
     if (!found) {
       // Fallback to first available scene
-      setVariable("STARTUP_SCENE", sceneNames.first());
+      setVariable("STARTUP_SCENE", "scene_" + sceneNames.first().toLower());
     }
   } else {
     // No scenes found? Use a safe placeholder to avoid compiler error
@@ -1403,10 +1409,13 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
   {
     m_inlineScenes += "\n// Scene Navigation Helper\n";
     m_inlineScenes += "function goto_scene(string name)\nbegin\n";
-    m_inlineScenes += "    let_me_alone();\n    write_delete(all_text);\n\n";
+    m_inlineScenes += "    // Stop music and clean up previous scene\n";
+    m_inlineScenes += "    music_stop();\n";
+    m_inlineScenes += "    let_me_alone();\n";
+    m_inlineScenes += "    write_delete(all_text);\n\n";
     for (const QString &sn : sceneNames)
-      m_inlineScenes +=
-          "    if (name == \"" + sn + "\") " + sn + "(); return; end\n";
+      m_inlineScenes += "    if (name == \"" + sn + "\") scene_" +
+                        sn.toLower() + "(); return; end\n";
     m_inlineScenes += "    say(\"Scene not found: \" + name);\nend\n";
   }
 }

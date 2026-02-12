@@ -4,6 +4,7 @@
 #include "mapdata.h"
 #include "projectmanager.h"
 #include <QMap>
+#include <QPixmap>
 #include <QSet>
 #include <QString>
 #include <QVector>
@@ -22,9 +23,12 @@ public:
 
   // Main generation
   QString generateMainPrg();
-  QString generateMainPrgWithEntities(const QVector<EntityInstance> &entities);
+  QString generateMainPrgWithEntities(
+      const QVector<EntityInstance> &entities,
+      const QVector<NPCPath> &npcPaths = QVector<NPCPath>());
   QString patchMainPrg(const QString &existingCode,
-                       const QVector<EntityInstance> &entities);
+                       const QVector<EntityInstance> &entities,
+                       const QVector<NPCPath> &npcPaths = QVector<NPCPath>());
 
   QString getWrapperOpen() const {
     return m_variables.value("ASSET_WRAPPER_OPEN");
@@ -55,6 +59,13 @@ public:
                         QSet<QString>()); // Scan and generate all .scn code
   bool patchMainIncludeScenes(const QString &projectPath);
   bool setStartupScene(const QString &projectPath, const QString &sceneName);
+  static bool loadSceneJson(const QString &path, SceneData &data);
+  QString generateUserLogicStubs(const QStringList &processNames);
+
+  // Getters for separate file generation
+  QString getInlineCommons() const { return m_inlineCommons; }
+  QString getInlineResources() const { return m_inlineResources; }
+  QString getInlineScenes() const { return m_inlineScenes; }
 
 private:
   ProjectData m_projectData;

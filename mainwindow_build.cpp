@@ -5,8 +5,11 @@
 #include "mainwindow.h"
 #include "processgenerator.h"
 #include "projectmanager.h"
+#include "raymapformat.h"
+#include "sceneeditor.h"
 #include <QDebug>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QMessageBox>
@@ -237,61 +240,29 @@ void MainWindow::onGenerateCode() {
   generator.setVariable("INITIAL_MAP", mapPath);
   generator.setVariable("FPG_PATH", fpgPath);
 
-  // Get entities from current map
+  // Get entities and NPC paths from current map
   QVector<EntityInstance> entities;
+  QVector<NPCPath> npcPaths;
   if (editor && editor->mapData()) {
     entities = editor->mapData()->entities;
+    npcPaths = editor->mapData()->npcPaths;
   }
 
-  // Generate entity process code (inline in main.prg, not separate files)
-  QString allEntityProcesses;
-  int entityProcessCount = 0;
-  if (!entities.isEmpty()) {
-    QStringList uniqueProcesses =
-        ProcessGenerator::getUniqueProcessNames(entities);
-
-    for (const QString &processName : uniqueProcesses) {
-      // Find first entity with this process name to get full entity data
-      for (const EntityInstance &entity : entities) {
-        if (entity.processName == processName) {
-          // Generate code with behavior
-          QString processCode =
-              ProcessGenerator::generateProcessCodeWithBehavior(entity);
-          allEntityProcesses += processCode + "\n";
-          entityProcessCount++;
-
-          if (m_consoleWidget)
-            m_consoleWidget->sendText(
-                QString("  Generated process: %1 (Activation: %2)\n")
-                    .arg(processName)
-                    .arg(entity.activationType ==
-                                 EntityInstance::ACTIVATION_ON_START
-                             ? "On Start"
-                         : entity.activationType ==
-                                 EntityInstance::ACTIVATION_ON_COLLISION
-                             ? "On Collision"
-                         : entity.activationType ==
-                                 EntityInstance::ACTIVATION_ON_TRIGGER
-                             ? "On Trigger"
-                         : entity.activationType ==
-                                 EntityInstance::ACTIVATION_ON_EVENT
-                             ? "On Event"
-                             : "Manual"));
-          break;
-        }
-      }
-    }
-  }
+  // Entity process generation moved down to consolidate with hybrid map
+  // entities
 
   // Generate main.prg with entities
-  QString code;
   QString mainPath = m_projectManager->getProjectPath() + "/src/main.prg";
   bool fileExists = QFile::exists(mainPath);
 
-  // Check if we are in "Scene" mode (2D UI/Scenes)
+  // Determine if we are in "Scene" mode (2D UI/Scenes)
   bool isScene = mapPath.endsWith(".scn", Qt::CaseInsensitive);
 
-  // Collect resources from current 3D map to pass to global generator
+  // Determine the primary directory for source files
+  QString srcDir = m_projectManager->getProjectPath() + "/src";
+  QDir().mkpath(srcDir);
+
+  // Collect resources from CURRENT map to pass to global generator
   QSet<QString> currentMapResources;
   for (const auto &ent : entities) {
     if (!ent.assetPath.isEmpty())
@@ -301,65 +272,256 @@ void MainWindow::onGenerateCode() {
     currentMapResources.insert(fpgPath);
 
   // ALWAYS generate common files (resources, scenes_list, scene_commons)
+  // This will populate m_inlineResources and m_inlineScenes
   generator.generateAllScenes(m_projectManager->getProjectPath(),
                               currentMapResources);
 
+  // Handle building from a SCENE map
   if (isScene) {
     QFileInfo sceneInfo(mapPath);
     QString sceneName = sceneInfo.baseName();
 
-    // Ensure main.prg is set up for scenes
-    generator.setStartupScene(m_projectManager->getProjectPath(), sceneName);
+    // UPDATE Project Data with new startup scene
+    projectData.startupScene = sceneName;
+    ProjectManager::saveProjectData(m_projectManager->getProjectPath(),
+                                    projectData);
 
-    if (m_consoleWidget) {
-      m_consoleWidget->sendText("Scene-based code generated successfully!\n");
-      m_consoleWidget->sendText("  Startup Scene: " + sceneName + "\n");
-    }
-    return; // Skip the rest of the 3D-specific generation
-  }
-
-  // 3D MODE: Standard Raycasting Map generation
-  if (fileExists) {
-    // Read existing code to patch it
-    QFile existingFile(mainPath);
-    if (existingFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-      QString existingCode = QString::fromUtf8(existingFile.readAll());
-      existingFile.close();
-      code = generator.patchMainPrg(existingCode, entities);
-    } else {
-      // Logic for new file: Generate Base + Patch (Inject Monolithic Block)
-      QString baseCode = generator.generateMainPrgWithEntities(entities);
-      code = generator.patchMainPrg(baseCode, entities);
-    }
+    // Ensure the variable is set with prefix for spawning in main.prg
+    generator.setVariable("STARTUP_SCENE", "scene_" + sceneName.toLower());
   } else {
-    // Logic for new file: Generate Base + Patch (Inject Monolithic Block)
-    QString baseCode = generator.generateMainPrgWithEntities(entities);
-    code = generator.patchMainPrg(baseCode, entities);
+    // If we are in a 3D map, ensure we don't accidentally use a scene as
+    // startup
+    if (projectData.startupScene.isEmpty()) {
+      generator.setVariable("STARTUP_SCENE", "// No startup scene set");
+    } else {
+      generator.setVariable("STARTUP_SCENE",
+                            "scene_" + projectData.startupScene.toLower());
+    }
   }
 
-  // Save to file
-  QString srcDir = m_projectManager->getProjectPath() + "/src";
-  QDir().mkpath(srcDir);
+  // 1. Consolidated Entity generation is now handled after project scan.
+  // We'll generate forward declarations first to avoid parameter type errors
+  QString forwardDecls =
+      ProcessGenerator::generateDeclarationsSection(entities);
+  {
+    QFile fileDecls(srcDir + "/autogen_decl.prg");
+    if (fileDecls.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      fileDecls.write(forwardDecls.toUtf8());
+      fileDecls.close();
+    }
+  }
 
-  QFile file(mainPath);
-  if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-    file.write(code.toUtf8());
-    file.close();
-    if (m_consoleWidget) {
-      m_consoleWidget->sendText("Code generated successfully!\n");
-      m_consoleWidget->sendText("  Main: src/main.prg\n");
-      m_consoleWidget->sendText("  Map: " + mapPath + "\n");
-      m_consoleWidget->sendText("  FPG: " + fpgPath + "\n");
-      if (entityProcessCount > 0) {
-        m_consoleWidget->sendText(
-            "  Entity types: " + QString::number(entityProcessCount) + "\n");
-        m_consoleWidget->sendText(
-            "  Entity instances: " + QString::number(entities.size()) + "\n");
+  // 2. Generate and save paths
+  QString npcPathsCode = ProcessGenerator::generateNPCPathsCode(npcPaths);
+  bool pathsFileExists = QFile::exists(srcDir + "/autogen_paths.prg");
+  if (!isScene || !pathsFileExists) {
+    if (npcPathsCode.isEmpty()) {
+      npcPathsCode = "function npc_paths_init()\nbegin\nend\n";
+    }
+    QFile filePaths(srcDir + "/autogen_paths.prg");
+    if (filePaths.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      filePaths.write(npcPathsCode.toUtf8());
+      filePaths.close();
+    }
+  }
+
+  // 3. Save monolithic resources/scenes file (ALWAYS update this)
+  QFile fileRes(srcDir + "/autogen_resources.prg");
+  if (fileRes.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    QString resCode = generator.getInlineCommons() + "\n" +
+                      generator.getInlineResources() + "\n" +
+                      generator.getInlineScenes();
+    fileRes.write(resCode.toUtf8());
+    fileRes.close();
+  }
+
+  // 4. Handle USER LOGIC stub (Smart Update)
+  QString userLogicPath = srcDir + "/user_logic.prg";
+  QStringList uniqueProcesses =
+      ProcessGenerator::getUniqueProcessNames(entities);
+
+  // CRITICAL FIX: Also scan all scenes in the project for ENTITY_WORLD3D
+  // to ensure their hybrid map entities also get stubs.
+  QDir projectDir(m_projectManager->getProjectPath());
+  QStringList scnFilters;
+  scnFilters << "*.scn" << "*.scene";
+  QDirIterator itScn(m_projectManager->getProjectPath(), scnFilters,
+                     QDir::Files | QDir::NoSymLinks,
+                     QDirIterator::Subdirectories);
+  while (itScn.hasNext()) {
+    SceneData scnData;
+    if (CodeGenerator::loadSceneJson(itScn.next(), scnData)) {
+      for (auto scnEnt : scnData.entities) {
+        if (scnEnt->type == ENTITY_WORLD3D) {
+          MapData hybridMap;
+          RayMapFormat loader;
+          QString fullMapPath = scnEnt->sourceFile;
+          if (!QFileInfo(fullMapPath).isAbsolute())
+            fullMapPath = projectDir.absolutePath() + "/" + fullMapPath;
+          if (loader.loadMap(fullMapPath, hybridMap, nullptr)) {
+            for (const auto &hEnt : hybridMap.entities) {
+              // Add to global entity list for process generation if not already
+              // there (Based on process name to avoid redundant code)
+              entities.append(hEnt);
+
+              QString pName = hEnt.processName;
+              if (pName.isEmpty())
+                pName = QFileInfo(hEnt.assetPath).baseName();
+              if (!pName.isEmpty()) {
+                pName =
+                    pName.replace(" ", "_").replace("-", "_").replace(".", "_");
+                if (!uniqueProcesses.contains(pName.toLower()))
+                  uniqueProcesses << pName.toLower();
+              }
+            }
+          }
+        }
       }
     }
+  }
+
+  // Generate ALL entity processes consolidated from main map and hybrid maps
+  QString allEntityProcesses = ProcessGenerator::generateAllProcessesCode(
+      entities, generator.getWrapperOpen(), generator.getWrapperClose());
+
+  // 1. Save (or Overwrite) consolidated entities file
+  {
+    QFile fileEntities(srcDir + "/autogen_entities.prg");
+    if (fileEntities.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      fileEntities.write(allEntityProcesses.toUtf8());
+      fileEntities.close();
+    }
+  }
+
+  if (!QFile::exists(userLogicPath)) {
+    QFile fileUser(userLogicPath);
+    if (fileUser.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      QString userLogicStubs =
+          generator.generateUserLogicStubs(uniqueProcesses);
+      fileUser.write(userLogicStubs.toUtf8());
+      fileUser.close();
+    }
   } else {
-    if (m_consoleWidget)
-      m_consoleWidget->sendText("Error generating code: Could not open " +
-                                file.fileName() + "\n");
+    // Append only missing hooks to avoid breaking user code
+    QFile fileUser(userLogicPath);
+    if (fileUser.open(QIODevice::ReadWrite | QIODevice::Text)) {
+      QString content = fileUser.readAll();
+      QString toAppend;
+      for (const QString &name : uniqueProcesses) {
+        QString lowerName = name.toLower();
+        bool hasInit = content.contains("hook_" + lowerName + "_init",
+                                        Qt::CaseInsensitive);
+        bool hasUpdate = content.contains("hook_" + lowerName + "_update",
+                                          Qt::CaseInsensitive);
+
+        if (!hasInit || !hasUpdate) {
+          toAppend +=
+              QString("\n// Hooks for %1 (Auto-added)\n").arg(lowerName);
+          if (!hasInit) {
+            toAppend += QString("function hook_%1_init(int p_id) begin end\n")
+                            .arg(lowerName);
+          }
+          if (!hasUpdate) {
+            toAppend += QString("function hook_%1_update(int p_id) begin end\n")
+                            .arg(lowerName);
+          }
+        }
+      }
+      if (!toAppend.isEmpty()) {
+        fileUser.seek(fileUser.size());
+        fileUser.write(toAppend.toUtf8());
+      }
+      fileUser.close();
+    }
+  }
+
+  // 5. Generate or UPDATE MAIN.PRG master
+  if (!fileExists) {
+    QFile fileMain(mainPath);
+    if (fileMain.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      QString masterMain =
+          "// " + projectData.name +
+          "\n"
+          "// Auto-generado por RayMap Editor\n\n"
+          "import \"libmod_gfx\";\n"
+          "import \"libmod_input\";\n"
+          "import \"libmod_misc\";\n"
+          "import \"libmod_ray\";\n"
+          "import \"libmod_sound\";\n\n"
+          "include \"autogen_decl.prg\";\n"
+          "include \"autogen_resources.prg\";\n"
+          "include \"autogen_entities.prg\";\n"
+          "include \"autogen_paths.prg\";\n"
+          "include \"user_logic.prg\";\n\n"
+          "GLOBAL\n"
+          "    int screen_w = " +
+          QString::number(projectData.screenWidth) +
+          ";\n"
+          "    int screen_h = " +
+          QString::number(projectData.screenHeight) +
+          ";\n"
+          "END\n\n"
+          "PROCESS main()\n"
+          "BEGIN\n"
+          "    set_mode(screen_w, screen_h, " +
+          (projectData.fullscreen ? "MODE_FULLSCREEN" : "MODE_WINDOW") +
+          ");\n"
+          "    set_fps(" +
+          QString::number(projectData.fps) +
+          ", 0);\n"
+          "    soundsys_init();\n\n"
+          "    load_project_resources();\n"
+          "    npc_paths_init();\n\n"
+          "    // [[ED_STARTUP_SCENE_START]]\n"
+          "    " +
+          generator.processTemplate("{{STARTUP_SCENE}}") +
+          "();\n"
+          "    // [[ED_STARTUP_SCENE_END]]\n\n"
+          "    LOOP\n"
+          "        if (key(_esc)) exit(); end\n"
+          "        RAY_CAMERA_UPDATE(0.017);\n"
+          "        FRAME;\n"
+          "    END\n"
+          "END\n";
+      fileMain.write(masterMain.toUtf8());
+      fileMain.close();
+    }
+  } else if (isScene) {
+    // If editing a scene, update the startup call in the master file using
+    // markers
+    QFile f(mainPath);
+    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+      QString content = QTextStream(&f).readAll();
+      f.close();
+
+      QString startMarker = "// [[ED_STARTUP_SCENE_START]]";
+      QString endMarker = "// [[ED_STARTUP_SCENE_END]]";
+      int startIdx = content.indexOf(startMarker);
+      int endIdx = content.indexOf(endMarker);
+
+      if (startIdx != -1 && endIdx != -1) {
+        QString newStartup = startMarker + "\n    scene_" +
+                             QFileInfo(mapPath).baseName().toLower() +
+                             "();\n    " + endMarker;
+        content.replace(startIdx, (endIdx + endMarker.length()) - startIdx,
+                        newStartup);
+
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+          f.write(content.toUtf8());
+          f.close();
+        }
+      }
+    }
+  }
+
+  if (m_consoleWidget) {
+    m_consoleWidget->sendText("Code generated successfully!\n");
+    if (isScene) {
+      m_consoleWidget->sendText("  Mode: Scene (" +
+                                QFileInfo(mapPath).baseName() + ")\n");
+    } else {
+      m_consoleWidget->sendText("  Mode: Map (" +
+                                QFileInfo(mapPath).baseName() + ")\n");
+    }
   }
 }

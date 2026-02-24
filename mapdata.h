@@ -1,6 +1,7 @@
 #ifndef MAPDATA_H
 #define MAPDATA_H
 
+#include <QByteArray>
 #include <QPixmap>
 #include <QPointF>
 #include <QSet>
@@ -20,6 +21,45 @@ struct TextureEntry {
 
   TextureEntry() : id(0) {}
   TextureEntry(const QString &fname, uint32_t tid) : filename(fname), id(tid) {}
+};
+
+/* ============================================================================
+   TERRAIN (HEIGHTMAP) v28
+   ============================================================================
+ */
+
+struct Terrain {
+  int id;
+  float x, y, z;
+  int cols, rows;
+  float cell_size;
+  QVector<float> heights; // Size must be (cols+1)*(rows+1)
+
+  // Multitexturing (Splatting)
+  int texture_ids[4];
+  float u_scales[4];
+  float v_scales[4];
+
+  // Blendmap
+  int blendmap_width;
+  int blendmap_height;
+  QByteArray blendmap_data; // RGBA pixels (width * height * 4)
+
+  Terrain()
+      : id(0), x(0), y(0), z(0), cols(32), rows(32), cell_size(64.0f),
+        blendmap_width(32), blendmap_height(32) {
+    heights.fill(0.0f, (cols + 1) * (rows + 1));
+    for (int i = 0; i < 4; i++) {
+      texture_ids[i] = 0;
+      u_scales[i] = 1.0f;
+      v_scales[i] = 1.0f;
+    }
+    blendmap_data.fill(char(0), blendmap_width * blendmap_height * 4);
+    // Default: Layer 0 fully opaque (Red channel = 255)
+    for (int i = 0; i < blendmap_width * blendmap_height * 4; i += 4) {
+      blendmap_data[i] = char(255);
+    }
+  }
 };
 
 /* ============================================================================
@@ -146,6 +186,41 @@ struct SpawnFlag {
 };
 
 /* ============================================================================
+   BEHAVIOR NODE SYSTEM
+   ============================================================================
+ */
+
+struct NodePinData {
+  int pinId;
+  QString name;
+  bool isInput;
+  bool isExecution;
+  QString value;
+  int linkedPinId;
+
+  NodePinData()
+      : pinId(-1), name(""), isInput(true), isExecution(false), value(""),
+        linkedPinId(-1) {}
+};
+
+struct NodeData {
+  int nodeId;
+  QString type;
+  float x, y;
+  QVector<NodePinData> pins;
+
+  NodeData() : nodeId(-1), type(""), x(0), y(0) {}
+};
+
+struct BehaviorGraph {
+  QVector<NodeData> nodes;
+  int nextNodeId;
+  int nextPinId;
+
+  BehaviorGraph() : nextNodeId(1), nextPinId(1) {}
+};
+
+/* ============================================================================
    ENTITY INSTANCE - For process generation
    ============================================================================
  */
@@ -160,11 +235,11 @@ struct EntityInstance {
 
   // ===== BEHAVIOR SYSTEM =====
   enum ActivationType {
-    ACTIVATION_ON_START,
-    ACTIVATION_ON_COLLISION,
-    ACTIVATION_ON_TRIGGER,
-    ACTIVATION_MANUAL,
-    ACTIVATION_ON_EVENT
+    ACTIVATION_ON_START = 0,
+    ACTIVATION_ON_COLLISION = 1,
+    ACTIVATION_ON_TRIGGER = 2,
+    ACTIVATION_MANUAL = 3,
+    ACTIVATION_ON_EVENT = 4
   };
   ActivationType activationType;
   QString collisionTarget;
@@ -172,13 +247,16 @@ struct EntityInstance {
   QString customAction;
   QString eventName;
 
+  // Visual Node Behavior
+  BehaviorGraph behaviorGraph;
+
   // ===== PLAYER & CONTROL SYSTEM =====
   bool isPlayer;
   enum ControlType {
-    CONTROL_NONE,
-    CONTROL_FIRST_PERSON,
-    CONTROL_THIRD_PERSON,
-    CONTROL_CAR
+    CONTROL_NONE = 0,
+    CONTROL_FIRST_PERSON = 1,
+    CONTROL_THIRD_PERSON = 2,
+    CONTROL_CAR = 3
   };
   ControlType controlType;
   bool cameraFollow;
@@ -194,6 +272,20 @@ struct EntityInstance {
   bool autoStartPath; // Auto-start following path on spawn
   bool snapToFloor;   // Snap to floor height automatically
 
+  // Billboard & Model Rendering properties
+  int graphId;
+  int startGraph;
+  int endGraph;
+  float animSpeed;
+  int billboard_directions;
+
+  // Physics / Collision Box (3D)
+  int width;
+  int depth;
+  int height;
+
+  bool collisionEnabled;
+
   EntityInstance()
       : spawn_id(0), x(0), y(0), z(0), angle(0),
         activationType(ACTIVATION_ON_START), collisionTarget("TYPE_PLAYER"),
@@ -201,7 +293,9 @@ struct EntityInstance {
         controlType(CONTROL_NONE), cameraFollow(false), cameraOffset_x(0),
         cameraOffset_y(0), cameraOffset_z(0), cameraRotation(0),
         initialRotation(0), isIntro(false), npcPathId(-1), autoStartPath(false),
-        snapToFloor(false) {}
+        snapToFloor(false), graphId(0), startGraph(0), endGraph(0),
+        animSpeed(0), billboard_directions(1), width(64), depth(64),
+        height(128), collisionEnabled(true) {}
 
   EntityInstance(const QString &pname, const QString &asset, const QString &t,
                  int id, float px, float py, float pz)
@@ -211,8 +305,10 @@ struct EntityInstance {
         eventName(""), isPlayer(false), controlType(CONTROL_NONE),
         cameraFollow(false), cameraOffset_x(0), cameraOffset_y(0),
         cameraOffset_z(0), cameraRotation(0), initialRotation(0),
-        isIntro(false), npcPathId(-1), autoStartPath(false),
-        snapToFloor(false) {}
+        isIntro(false), npcPathId(-1), autoStartPath(false), snapToFloor(false),
+        graphId(0), startGraph(0), endGraph(0), animSpeed(0),
+        billboard_directions(1), width(64), depth(64), height(128),
+        collisionEnabled(true) {}
 };
 
 /* ============================================================================
@@ -272,6 +368,24 @@ struct SectorGroup {
 };
 
 /* ============================================================================
+   LIGHT - Focal or omni light
+   ============================================================================
+ */
+
+struct Light {
+  int id;
+  float x, y, z;
+  float radius;
+  int color_r, color_g, color_b;
+  float intensity;
+  bool active;
+
+  Light()
+      : id(0), x(0), y(0), z(64), radius(256.0f), color_r(255), color_g(255),
+        color_b(255), intensity(1.0f), active(true) {}
+};
+
+/* ============================================================================
    NPC PATH SYSTEM - Waypoint-based movement for NPCs
    ============================================================================
  */
@@ -326,8 +440,14 @@ struct MapData {
   /* Decals */
   QVector<Decal> decals;
 
+  /* Terrains (Heightmaps) */
+  QVector<Terrain> terrains;
+
   /* Entities (MD3 Models) */
   QVector<EntityInstance> entities;
+
+  /* Lights */
+  QVector<Light> lights;
 
   /* Sector Groups */
   QVector<SectorGroup> sectorGroups;

@@ -10,6 +10,8 @@
 #include "mapdata.h"
 #include "textureselector.h"
 #include "visualmodewidget.h"
+#include <QAction>
+#include <QActionGroup>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
@@ -21,6 +23,8 @@
 #include <QMap>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QTabWidget>
+#include <QToolBar>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 
@@ -236,10 +240,9 @@ private:
   EntityPropertyPanel *m_entityPanel; // NEW
 
   // Dock widgets
-  QDockWidget *m_sectorDock;
-  QDockWidget *m_wallDock;
-  QDockWidget *m_entityDock;     // NEW: Property dock member
-  QDockWidget *m_sectorListDock; // NEW: List of all sectors
+  QDockWidget *m_propertiesDock; // Consolidated properties dock
+  QTabWidget *m_propertiesTabs;  // Tabs for Sector/Wall/Entity
+  QDockWidget *m_sectorListDock; // Hierarchical list of sectors
   QDockWidget *m_sceneEntitiesDock = nullptr;
   QTreeWidget *m_sceneEntitiesTree = nullptr;
 
@@ -275,10 +278,8 @@ private:
   QPushButton *m_deleteDecalButton;
 
   // Toolbar
-  QComboBox *m_modeCombo;
   QSpinBox *m_selectedTextureSpin;
   QSpinBox *m_skyboxSpin;
-  QPushButton *m_manualPortalsButton; // REPLACED
 
   // Status bar
   QLabel *m_statusLabel;
@@ -361,6 +362,25 @@ private:
   QAction *m_clearInteractionAction = nullptr;
   QSpinBox *m_brushSizeSpin = nullptr;
   QComboBox *m_paintColorCombo = nullptr;
+
+  // Mode Actions
+  QAction *m_drawSectorModeAction;
+  QAction *m_editVerticesModeAction;
+  QAction *m_selectWallModeAction;
+  QAction *m_selectEntityModeAction;
+  QAction *m_selectSectorModeAction;
+  QAction *m_placeSpriteModeAction;
+  QAction *m_placeSpawnModeAction;
+  QAction *m_placeCameraModeAction;
+  QAction *m_manualPortalModeAction;
+  QActionGroup *m_modeGroup;
+
+  // Toolbars
+  QToolBar *m_mainToolbar;
+  QToolBar *m_modeToolbar;
+  QToolBar *m_insertToolbar;
+  QToolBar *m_toolsToolbar;
+  QToolBar *m_buildToolbar;
 
   // Helpers
 

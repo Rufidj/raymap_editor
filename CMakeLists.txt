@@ -65,6 +65,7 @@ set(PROJECT_SOURCES
     downloader.h downloader.cpp
     fonteditordialog.h fonteditordialog.cpp
     bennurenderer.h bennurenderer.cpp
+    behaviornodeeditor.h behaviornodeeditor.cpp
     resources.qrc
 )
 

@@ -9,6 +9,7 @@
 #include <QGroupBox>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QTextEdit>
 
 class EntityBehaviorDialog : public QDialog {
@@ -16,7 +17,7 @@ class EntityBehaviorDialog : public QDialog {
 
 public:
   explicit EntityBehaviorDialog(
-      const EntityInstance &entity,
+      const EntityInstance &entity, const QString &projectPath,
       const QVector<NPCPath> *availablePaths = nullptr,
       const QStringList &availableProcesses = QStringList(),
       QWidget *parent = nullptr);
@@ -27,9 +28,11 @@ private slots:
   void onActivationTypeChanged(int index);
   void onAccept();
   void onPreviewCode();
+  void onOpenNodeEditor();
 
 private:
   EntityInstance m_entity;
+  QString m_projectPath;
   const QVector<NPCPath> *m_availablePaths;
   QStringList m_availableProcesses;
 
@@ -62,9 +65,15 @@ private:
   QComboBox *m_npcPathCombo;
   QCheckBox *m_autoStartPathCheck;
   QCheckBox *m_snapToFloorCheck;
+  QSpinBox *m_directionsSpin;
+
+  // Physics / Collision Box settings
+  QGroupBox *m_physicsGroup;
+  QLineEdit *m_colSize[3]; // 0: Width, 1: Depth, 2: Height
 
   // Preview
   QPushButton *m_previewButton;
+  QPushButton *m_nodeEditorButton;
 
   void setupUI();
   void updateVisibility();

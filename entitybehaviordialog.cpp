@@ -1,4 +1,5 @@
 #include "entitybehaviordialog.h"
+#include "behaviornodeeditor.h"
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -6,9 +7,11 @@
 #include <QVBoxLayout>
 
 EntityBehaviorDialog::EntityBehaviorDialog(
-    const EntityInstance &entity, const QVector<NPCPath> *availablePaths,
+    const EntityInstance &entity, const QString &projectPath,
+    const QVector<NPCPath> *availablePaths,
     const QStringList &availableProcesses, QWidget *parent)
-    : QDialog(parent), m_entity(entity), m_availablePaths(availablePaths),
+    : QDialog(parent), m_entity(entity), m_projectPath(projectPath),
+      m_availablePaths(availablePaths),
       m_availableProcesses(availableProcesses) {
   setWindowTitle(tr("Editar Comportamiento - %1").arg(entity.processName));
   setMinimumWidth(500);
@@ -195,6 +198,78 @@ void EntityBehaviorDialog::setupUI() {
   npcPathGroup->setLayout(npcPathLayout);
   mainLayout->addWidget(npcPathGroup);
 
+  // Physics / Collision Box settings
+  m_physicsGroup = new QGroupBox(tr("Física y Caja de Colisión (3D)"));
+  QFormLayout *physicsLayout = new QFormLayout();
+  m_colSize[0] = new QLineEdit(QString::number(m_entity.width));
+  m_colSize[1] = new QLineEdit(QString::number(m_entity.depth));
+  m_colSize[2] = new QLineEdit(QString::number(m_entity.height));
+  physicsLayout->addRow(tr("Ancho (Width - X):"), m_colSize[0]);
+  physicsLayout->addRow(tr("Fondo (Depth - Y):"), m_colSize[1]);
+  physicsLayout->addRow(tr("Alto (Height - Z):"), m_colSize[2]);
+  m_physicsGroup->setLayout(physicsLayout);
+  mainLayout->addWidget(m_physicsGroup);
+
+  if (m_entity.type != "model") {
+    m_physicsGroup->setVisible(false);
+  }
+
+  // Billboard Settings (conditional)
+  QGroupBox *billboardGroup =
+      new QGroupBox(tr("Configuración de Billboard (2D)"));
+  QFormLayout *billboardLayout = new QFormLayout();
+
+  QLineEdit *graphIdEdit = new QLineEdit(QString::number(m_entity.graphId));
+  graphIdEdit->setObjectName("graphId");
+  billboardLayout->addRow(tr("ID de Gráfico (Graph ID):"), graphIdEdit);
+
+  QLineEdit *startGraphEdit =
+      new QLineEdit(QString::number(m_entity.startGraph));
+  startGraphEdit->setObjectName("startGraph");
+  billboardLayout->addRow(tr("Gráfico Inicial Animación:"), startGraphEdit);
+
+  QLineEdit *endGraphEdit = new QLineEdit(QString::number(m_entity.endGraph));
+  endGraphEdit->setObjectName("endGraph");
+  billboardLayout->addRow(tr("Gráfico Final Animación:"), endGraphEdit);
+
+  QLineEdit *animSpeedEdit = new QLineEdit(QString::number(m_entity.animSpeed));
+  animSpeedEdit->setObjectName("animSpeed");
+  billboardLayout->addRow(tr("Velocidad Animación (0 = estático):"),
+                          animSpeedEdit);
+
+  QLineEdit *widthEdit = new QLineEdit(QString::number(m_entity.width));
+  widthEdit->setObjectName("width");
+  billboardLayout->addRow(tr("Ancho (Width):"), widthEdit);
+
+  QLineEdit *heightEdit = new QLineEdit(QString::number(m_entity.height));
+  heightEdit->setObjectName("height");
+  billboardLayout->addRow(tr("Alto (Height):"), heightEdit);
+
+  m_directionsSpin = new QSpinBox();
+  m_directionsSpin->setRange(1, 32);
+  m_directionsSpin->setValue(m_entity.billboard_directions);
+  m_directionsSpin->setObjectName("directions");
+  m_directionsSpin->setToolTip(
+      tr("Número de direcciones en el FPG (1 para billboard simple, 8 para "
+         "sprites estilo Doom/Duke3D)\n"
+         "NOTA: El FPG debe estar intercalado (Frame1: N, E, S, W, Frame2: N, "
+         "E...)\n"
+         "Si pones 4, el script saltará de 4 en 4 graficos para animar."));
+  billboardLayout->addRow(tr("Direcciones (1, 4, 8):"), m_directionsSpin);
+
+  QLabel *helpLabel =
+      new QLabel(tr("<small><i>* El FPG debe seguir el orden: Frente, Derecha, "
+                    "Atrás, Izquierda.</i></small>"));
+  helpLabel->setWordWrap(true);
+  billboardLayout->addRow("", helpLabel);
+
+  billboardGroup->setLayout(billboardLayout);
+  mainLayout->addWidget(billboardGroup);
+
+  if (m_entity.type != "billboard") {
+    billboardGroup->setVisible(false);
+  }
+
   // Custom Action
   QGroupBox *actionGroup =
       new QGroupBox(tr("Acción Personalizada (Código BennuGD)"));
@@ -216,7 +291,16 @@ void EntityBehaviorDialog::setupUI() {
   m_previewButton = new QPushButton(tr("Vista Previa del Código"));
   connect(m_previewButton, &QPushButton::clicked, this,
           &EntityBehaviorDialog::onPreviewCode);
-  mainLayout->addWidget(m_previewButton);
+
+  m_nodeEditorButton = new QPushButton(tr("Editor de Nodos de Comportamiento"));
+  m_nodeEditorButton->setIcon(QIcon(":/icons/nodes.png")); // Placeholder icon
+  connect(m_nodeEditorButton, &QPushButton::clicked, this,
+          &EntityBehaviorDialog::onOpenNodeEditor);
+
+  QHBoxLayout *buttonRow = new QHBoxLayout();
+  buttonRow->addWidget(m_previewButton);
+  buttonRow->addWidget(m_nodeEditorButton);
+  mainLayout->addLayout(buttonRow);
 
   // Connect signals for dynamic visibility
   connect(m_playerGroup, &QGroupBox::toggled, this,
@@ -297,6 +381,39 @@ void EntityBehaviorDialog::onAccept() {
   m_entity.autoStartPath = m_autoStartPathCheck->isChecked();
   m_entity.snapToFloor = m_snapToFloorCheck->isChecked();
 
+  // Billboard
+  if (m_entity.type == "billboard") {
+    QLineEdit *graphIdEdit = findChild<QLineEdit *>("graphId");
+    QLineEdit *startGraphEdit = findChild<QLineEdit *>("startGraph");
+    QLineEdit *endGraphEdit = findChild<QLineEdit *>("endGraph");
+    QLineEdit *animSpeedEdit = findChild<QLineEdit *>("animSpeed");
+    QLineEdit *widthEdit = findChild<QLineEdit *>("width");
+    QLineEdit *heightEdit = findChild<QLineEdit *>("height");
+
+    if (graphIdEdit)
+      m_entity.graphId = graphIdEdit->text().toInt();
+    if (startGraphEdit)
+      m_entity.startGraph = startGraphEdit->text().toInt();
+    if (endGraphEdit)
+      m_entity.endGraph = endGraphEdit->text().toInt();
+    if (animSpeedEdit)
+      m_entity.animSpeed = animSpeedEdit->text().toFloat();
+    if (widthEdit)
+      m_entity.width = widthEdit->text().toInt();
+    if (heightEdit)
+      m_entity.height = heightEdit->text().toInt();
+    if (m_directionsSpin)
+      m_entity.billboard_directions = m_directionsSpin->value();
+  }
+
+  // Physics / Model Size
+  if (m_colSize[0])
+    m_entity.width = m_colSize[0]->text().toInt();
+  if (m_colSize[1])
+    m_entity.depth = m_colSize[1]->text().toInt();
+  if (m_colSize[2])
+    m_entity.height = m_colSize[2]->text().toInt();
+
   accept();
 }
 
@@ -360,4 +477,11 @@ QString EntityBehaviorDialog::generatePreviewCode() const {
   code += "End\n";
 
   return code;
+}
+
+void EntityBehaviorDialog::onOpenNodeEditor() {
+  BehaviorNodeEditor editor(m_entity.behaviorGraph, m_projectPath, this);
+  if (editor.exec() == QDialog::Accepted) {
+    // Logic for when the editor is closed/saved if needed
+  }
 }

@@ -25,7 +25,8 @@
 #include "wldimporter.h" // WLD import support
 #include <QApplication>
 #include <QColorDialog> // Added based on instruction
-#include <QDebug>       // Added based on instruction
+#include <QDebug>
+#include <QDebug> // Added based on instruction
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -33,8 +34,10 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QInputDialog>
 #include <QLabel>
+#include <QMenu>
 #include <QMenu> // Added based on instruction
 #include <QMenuBar>
 #include <QMessageBox>
@@ -54,8 +57,7 @@ MainWindow::MainWindow(QWidget *parent)
       m_consoleDock(nullptr), m_codePreviewPanel(nullptr),
       m_codePreviewDock(nullptr), m_buildManager(nullptr),
       m_projectManager(nullptr), m_assetDock(nullptr), m_sectorPanel(nullptr),
-      m_wallPanel(nullptr), m_entityPanel(nullptr), m_sectorDock(nullptr),
-      m_wallDock(nullptr), m_sectorListDock(nullptr),
+      m_wallPanel(nullptr), m_entityPanel(nullptr), m_sectorListDock(nullptr),
       m_sceneEntitiesDock(nullptr), m_sceneEntitiesTree(nullptr),
       m_sectorTree(nullptr), m_sectorIdLabel(nullptr),
       m_sectorFloorZSpin(nullptr), m_sectorCeilingZSpin(nullptr),
@@ -63,10 +65,11 @@ MainWindow::MainWindow(QWidget *parent)
       m_wallIdLabel(nullptr), m_wallTextureLowerSpin(nullptr),
       m_wallTextureMiddleSpin(nullptr), m_wallTextureUpperSpin(nullptr),
       m_wallSplitLowerSpin(nullptr), m_wallSplitUpperSpin(nullptr),
-      m_modeCombo(nullptr), m_selectedTextureSpin(nullptr),
-      m_skyboxSpin(nullptr), m_manualPortalsButton(nullptr),
       m_statusLabel(nullptr), m_fpgEditor(nullptr), m_portalTexGroup(nullptr),
-      m_portalUpperSpin(nullptr), m_portalLowerSpin(nullptr) {
+      m_portalUpperSpin(nullptr), m_portalLowerSpin(nullptr),
+      m_modeGroup(nullptr), m_mainToolbar(nullptr), m_modeToolbar(nullptr),
+      m_insertToolbar(nullptr), m_toolsToolbar(nullptr),
+      m_buildToolbar(nullptr) {
   qDebug() << "MainWindow construction started...";
   m_projectManager = new ProjectManager(this); // Initialize ProjectManager
 
@@ -118,19 +121,23 @@ MainWindow::~MainWindow() { saveSettings(); }
 
 void MainWindow::createActions() {
   // File actions
-  m_newAction = new QAction(tr("&Nuevo"), this);
+  m_newAction =
+      new QAction(QIcon::fromTheme("document-new"), tr("&Nuevo"), this);
   m_newAction->setShortcut(QKeySequence::New);
   connect(m_newAction, &QAction::triggered, this, &MainWindow::onNewMap);
 
-  m_openAction = new QAction(tr("&Abrir..."), this);
+  m_openAction =
+      new QAction(QIcon::fromTheme("document-open"), tr("&Abrir..."), this);
   m_openAction->setShortcut(QKeySequence::Open);
   connect(m_openAction, &QAction::triggered, this, &MainWindow::onOpenMap);
 
-  m_saveAction = new QAction(tr("&Guardar"), this);
+  m_saveAction =
+      new QAction(QIcon::fromTheme("document-save"), tr("&Guardar"), this);
   m_saveAction->setShortcut(QKeySequence::Save);
   connect(m_saveAction, &QAction::triggered, this, &MainWindow::onSaveMap);
 
-  m_saveAsAction = new QAction(tr("Guardar &como..."), this);
+  m_saveAsAction = new QAction(QIcon::fromTheme("document-save-as"),
+                               tr("Guardar &como..."), this);
   m_saveAsAction->setShortcut(QKeySequence::SaveAs);
   connect(m_saveAsAction, &QAction::triggered, this, &MainWindow::onSaveMapAs);
 
@@ -142,19 +149,23 @@ void MainWindow::createActions() {
   connect(m_exitAction, &QAction::triggered, this, &MainWindow::onExit);
 
   // View actions
-  m_zoomInAction = new QAction(tr("Acercar"), this);
+  m_zoomInAction =
+      new QAction(QIcon::fromTheme("zoom-in"), tr("Acercar"), this);
   m_zoomInAction->setShortcut(QKeySequence::ZoomIn);
   connect(m_zoomInAction, &QAction::triggered, this, &MainWindow::onZoomIn);
 
-  m_zoomOutAction = new QAction(tr("Alejar"), this);
+  m_zoomOutAction =
+      new QAction(QIcon::fromTheme("zoom-out"), tr("Alejar"), this);
   m_zoomOutAction->setShortcut(QKeySequence::ZoomOut);
   connect(m_zoomOutAction, &QAction::triggered, this, &MainWindow::onZoomOut);
 
-  m_zoomResetAction = new QAction(tr("Restablecer zoom"), this);
+  m_zoomResetAction = new QAction(QIcon::fromTheme("zoom-original"),
+                                  tr("Restablecer zoom"), this);
   connect(m_zoomResetAction, &QAction::triggered, this,
           &MainWindow::onZoomReset);
 
-  m_viewGridAction = new QAction(tr("Ver Cuadrícula"), this);
+  m_viewGridAction =
+      new QAction(QIcon::fromTheme("view-grid"), tr("Ver Cuadrícula"), this);
   m_viewGridAction->setCheckable(true);
   m_viewGridAction->setChecked(true);
   connect(m_viewGridAction, &QAction::toggled, this, [this](bool checked) {
@@ -167,6 +178,74 @@ void MainWindow::createActions() {
   m_visualModeAction->setShortcut(QKeySequence(tr("F3")));
   connect(m_visualModeAction, &QAction::triggered, this,
           &MainWindow::onToggleVisualMode);
+
+  // --- MODE ACTIONS ---
+  m_modeGroup = new QActionGroup(this);
+  m_modeGroup->setExclusive(true);
+
+  m_drawSectorModeAction = new QAction(QIcon::fromTheme("draw-freehand"),
+                                       tr("Dibujar Sector"), this);
+  m_drawSectorModeAction->setCheckable(true);
+  m_drawSectorModeAction->setData(GridEditor::MODE_DRAW_SECTOR);
+  m_modeGroup->addAction(m_drawSectorModeAction);
+
+  m_editVerticesModeAction =
+      new QAction(QIcon::fromTheme("edit-node"), tr("Editar Vértices"), this);
+  m_editVerticesModeAction->setCheckable(true);
+  m_editVerticesModeAction->setData(GridEditor::MODE_EDIT_VERTICES);
+  m_modeGroup->addAction(m_editVerticesModeAction);
+
+  m_selectWallModeAction = new QAction(QIcon::fromTheme("edit-select-all"),
+                                       tr("Seleccionar Pared"), this);
+  m_selectWallModeAction->setCheckable(true);
+  m_selectWallModeAction->setData(GridEditor::MODE_SELECT_WALL);
+  m_modeGroup->addAction(m_selectWallModeAction);
+
+  m_selectEntityModeAction = new QAction(QIcon::fromTheme("list-add"),
+                                         tr("Seleccionar Entidad"), this);
+  m_selectEntityModeAction->setCheckable(true);
+  m_selectEntityModeAction->setData(GridEditor::MODE_SELECT_ENTITY);
+  m_modeGroup->addAction(m_selectEntityModeAction);
+
+  m_selectSectorModeAction = new QAction(QIcon::fromTheme("edit-select"),
+                                         tr("Seleccionar Sector"), this);
+  m_selectSectorModeAction->setCheckable(true);
+  m_selectSectorModeAction->setData(GridEditor::MODE_SELECT_SECTOR);
+  m_modeGroup->addAction(m_selectSectorModeAction);
+
+  m_placeSpriteModeAction =
+      new QAction(QIcon::fromTheme("insert-image"), tr("Colocar Sprite"), this);
+  m_placeSpriteModeAction->setCheckable(true);
+  m_placeSpriteModeAction->setData(GridEditor::MODE_PLACE_SPRITE);
+  m_modeGroup->addAction(m_placeSpriteModeAction);
+
+  m_placeSpawnModeAction = new QAction(QIcon::fromTheme("vcs-conflicting"),
+                                       tr("Colocar Spawn"), this);
+  m_placeSpawnModeAction->setCheckable(true);
+  m_placeSpawnModeAction->setData(GridEditor::MODE_PLACE_SPAWN);
+  m_modeGroup->addAction(m_placeSpawnModeAction);
+
+  m_placeCameraModeAction =
+      new QAction(QIcon::fromTheme("camera-photo"), tr("Colocar Cámara"), this);
+  m_placeCameraModeAction->setCheckable(true);
+  m_placeCameraModeAction->setData(GridEditor::MODE_PLACE_CAMERA);
+  m_modeGroup->addAction(m_placeCameraModeAction);
+
+  m_manualPortalModeAction = new QAction(QIcon::fromTheme("network-connect"),
+                                         tr("Portal Manual"), this);
+  m_manualPortalModeAction->setCheckable(true);
+  m_manualPortalModeAction->setData(GridEditor::MODE_MANUAL_PORTAL);
+  m_modeGroup->addAction(m_manualPortalModeAction);
+
+  m_drawSectorModeAction->setChecked(true);
+
+  connect(m_modeGroup, &QActionGroup::triggered, this, [this](QAction *action) {
+    GridEditor *editor = getCurrentEditor();
+    if (editor) {
+      editor->setEditMode(
+          static_cast<GridEditor::EditMode>(action->data().toInt()));
+    }
+  });
 }
 
 void MainWindow::createMenus() {
@@ -420,174 +499,175 @@ void MainWindow::createMenus() {
 }
 
 void MainWindow::createToolbars() {
-  QToolBar *toolbar = addToolBar(tr("Principal"));
+  // 1. Main Toolbar (File operations)
+  m_mainToolbar = addToolBar(tr("Archivo"));
+  m_mainToolbar->setObjectName("MainToolbar");
+  m_mainToolbar->setIconSize(QSize(24, 24));
+  m_mainToolbar->addAction(m_newAction);
+  m_mainToolbar->addAction(m_openAction);
+  m_mainToolbar->addAction(m_saveAction);
+  m_mainToolbar->addSeparator();
+  m_mainToolbar->addAction(m_zoomInAction);
+  m_mainToolbar->addAction(m_zoomOutAction);
+  m_mainToolbar->addAction(m_zoomResetAction);
+  m_mainToolbar->addSeparator();
+  m_mainToolbar->addAction(m_visualModeAction);
 
-  // Edit mode selector
-  toolbar->addWidget(new QLabel(tr(" Modo: ")));
-  m_modeCombo = new QComboBox();
-  m_modeCombo->addItem("Dibujar Sector", GridEditor::MODE_DRAW_SECTOR);
-  m_modeCombo->addItem("Editar Vértices", GridEditor::MODE_EDIT_VERTICES);
-  m_modeCombo->addItem("Seleccionar Pared", GridEditor::MODE_SELECT_WALL);
-  m_modeCombo->addItem(
-      "Seleccionar Entidad",
-      GridEditor::MODE_SELECT_ENTITY); // Added here for visibility
-  m_modeCombo->addItem("Seleccionar Sector", GridEditor::MODE_SELECT_SECTOR);
-  m_modeCombo->addItem("Colocar Sprite", GridEditor::MODE_PLACE_SPRITE);
-  m_modeCombo->addItem("Colocar Spawn", GridEditor::MODE_PLACE_SPAWN);
-  m_modeCombo->addItem("Colocar Cámara", GridEditor::MODE_PLACE_CAMERA);
-  m_modeCombo->addItem(
-      "Portal Manual",
-      GridEditor::MODE_MANUAL_PORTAL); // Also beneficial to expose this
+  // 2. Mode Toolbar (Tools for editing)
+  m_modeToolbar = addToolBar(tr("Herramientas de Edición"));
+  m_modeToolbar->setObjectName("ModeToolbar");
+  m_modeToolbar->setIconSize(QSize(24, 24));
+  m_modeToolbar->addAction(m_drawSectorModeAction);
+  m_modeToolbar->addAction(m_editVerticesModeAction);
+  m_modeToolbar->addAction(m_selectWallModeAction);
+  m_modeToolbar->addAction(m_selectSectorModeAction);
+  m_modeToolbar->addAction(m_selectEntityModeAction);
+  m_modeToolbar->addSeparator();
+  m_modeToolbar->addAction(m_placeSpriteModeAction);
+  m_modeToolbar->addAction(m_placeSpawnModeAction);
+  m_modeToolbar->addAction(m_placeCameraModeAction);
+  m_modeToolbar->addSeparator();
+  m_modeToolbar->addAction(m_manualPortalModeAction);
 
-  connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-          this, &MainWindow::onModeChanged);
-  toolbar->addWidget(m_modeCombo);
+  // 3. Insertion Toolbar (Shapes and prefab objects)
+  m_insertToolbar = addToolBar(tr("Insertar"));
+  m_insertToolbar->setObjectName("InsertToolbar");
+  m_insertToolbar->setIconSize(QSize(24, 24));
+  m_insertToolbar->addAction(m_insertBoxAction);
+  m_insertToolbar->addAction(m_insertColumnAction);
+  m_insertToolbar->addAction(m_insertPlatformAction);
+  m_insertToolbar->addSeparator();
 
-  toolbar->addSeparator();
+  // Shapes (from previous QPushButton-based implementation)
+  QAction *rectAction =
+      new QAction(QIcon::fromTheme("draw-rectangle"), tr("Rectángulo"), this);
+  connect(rectAction, &QAction::triggered, this,
+          &MainWindow::onCreateRectangle);
+  m_insertToolbar->addAction(rectAction);
 
-  // Texture selector
-  toolbar->addWidget(new QLabel(tr(" Textura: ")));
+  QAction *circleAction =
+      new QAction(QIcon::fromTheme("draw-circle"), tr("Círculo"), this);
+  connect(circleAction, &QAction::triggered, this, &MainWindow::onCreateCircle);
+  m_insertToolbar->addAction(circleAction);
+
+  // 4. Tools Toolbar (External tools)
+  m_toolsToolbar = addToolBar(tr("Motores y Editores"));
+  m_toolsToolbar->setObjectName("ToolsToolbar");
+  m_toolsToolbar->setIconSize(QSize(24, 24));
+
+  QAction *fpgAction =
+      new QAction(QIcon::fromTheme("image-x-generic"), tr("FPG"), this);
+  fpgAction->setToolTip(tr("Editor FPG"));
+  connect(fpgAction, &QAction::triggered, this, &MainWindow::onOpenFPGEditor);
+  m_toolsToolbar->addAction(fpgAction);
+
+  QAction *effectAction = new QAction(QIcon::fromTheme("applications-graphics"),
+                                      tr("Efectos"), this);
+  effectAction->setToolTip(tr("Generador de Efectos"));
+  connect(effectAction, &QAction::triggered, this,
+          &MainWindow::onOpenEffectGenerator);
+  m_toolsToolbar->addAction(effectAction);
+
+  QAction *meshAction =
+      new QAction(QIcon::fromTheme("poly-editor"), tr("MD3"), this);
+  meshAction->setToolTip(tr("Generador de Modelos MD3"));
+  connect(meshAction, &QAction::triggered, this,
+          &MainWindow::onOpenMeshGenerator);
+  m_toolsToolbar->addAction(meshAction);
+
+  // 5. Build Toolbar
+  m_buildToolbar = addToolBar(tr("Compilación"));
+  m_buildToolbar->setObjectName("BuildToolbar");
+  m_buildToolbar->setIconSize(QSize(24, 24));
+
+  QAction *buildAction =
+      new QAction(QIcon::fromTheme("run-build"), tr("Compilar"), this);
+  buildAction->setShortcut(QKeySequence("F5"));
+  buildAction->setToolTip(tr("Compilar Proyecto (F5)"));
+  connect(buildAction, &QAction::triggered, this, &MainWindow::onBuildProject);
+  m_buildToolbar->addAction(buildAction);
+
+  QAction *runAction = new QAction(QIcon::fromTheme("media-playback-start"),
+                                   tr("Ejecutar"), this);
+  runAction->setShortcut(QKeySequence("F9"));
+  runAction->setToolTip(tr("Ejecutar (F9)"));
+  connect(runAction, &QAction::triggered, this, &MainWindow::onRunProject);
+  m_buildToolbar->addAction(runAction);
+
+  // Properties Toolbar (Texture selection, etc.) - Floating or bottom
+  QToolBar *propToolbar = addToolBar(tr("Propiedades"));
+  propToolbar->setObjectName("PropertyToolbar");
+
+  propToolbar->addWidget(new QLabel(tr(" Textura: ")));
   m_selectedTextureSpin = new QSpinBox();
   m_selectedTextureSpin->setRange(0, 9999);
   m_selectedTextureSpin->setValue(1);
   connect(m_selectedTextureSpin, QOverload<int>::of(&QSpinBox::valueChanged),
           this, &MainWindow::onTextureSelected);
-  toolbar->addWidget(m_selectedTextureSpin);
+  propToolbar->addWidget(m_selectedTextureSpin);
 
-  toolbar->addSeparator();
+  propToolbar->addSeparator();
 
-  // Skybox selector
-  toolbar->addWidget(new QLabel(tr(" Cielo: ")));
+  propToolbar->addWidget(new QLabel(tr(" Cielo: ")));
   m_skyboxSpin = new QSpinBox();
   m_skyboxSpin->setRange(0, 9999);
   m_skyboxSpin->setValue(0);
-  m_skyboxSpin->setToolTip(tr("ID de textura del cielo (0 = azul sólido)"));
   connect(m_skyboxSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
           &MainWindow::onSkyboxTextureChanged);
-  toolbar->addWidget(m_skyboxSpin);
+  propToolbar->addWidget(m_skyboxSpin);
 
-  toolbar->addSeparator();
-
-  // Tools
-  // Tools
-  m_manualPortalsButton = new QPushButton(tr("P. Manual"));
-  m_manualPortalsButton->setCheckable(true);
-  m_manualPortalsButton->setToolTip(tr(
-      "Modo Manual: Click en Pared A -> Click en Pared B para crear portal"));
-  connect(m_manualPortalsButton, &QPushButton::toggled, this,
-          &MainWindow::onToggleManualPortals);
-  toolbar->addWidget(m_manualPortalsButton);
-
-  QPushButton *detectPortalsBtn = new QPushButton(tr("Auto Portales"));
-  detectPortalsBtn->setToolTip(
-      tr("Borrar todo y detectar portales automáticamente"));
-  connect(detectPortalsBtn, &QPushButton::clicked, this,
-          &MainWindow::onDetectPortals);
-  toolbar->addWidget(detectPortalsBtn);
-
-  toolbar->addSeparator();
-
-  // Shape tools
-  toolbar->addWidget(new QLabel(tr(" Formas: ")));
-
-  QPushButton *rectBtn = new QPushButton(tr("Rectángulo"));
-  rectBtn->setToolTip(tr("Crear un sector rectangular de 512x512"));
-  connect(rectBtn, &QPushButton::clicked, this, &MainWindow::onCreateRectangle);
-  toolbar->addWidget(rectBtn);
-
-  QPushButton *circleBtn = new QPushButton(tr("Círculo"));
-  circleBtn->setToolTip(tr("Crear un sector circular de radio 256"));
-  connect(circleBtn, &QPushButton::clicked, this, &MainWindow::onCreateCircle);
-  toolbar->addWidget(circleBtn);
-
-  toolbar->addSeparator();
-
-  // Build & Run
-  QPushButton *buildBtn =
-      new QPushButton(QIcon::fromTheme("system-run"), tr("Compilar (F5)"));
-  buildBtn->setIcon(
-      QIcon::fromTheme("media-playback-start")); // Using media icon as generic
-                                                 // 'start' if system-run fails
-  // actually let's use standard icons if possible, or text if not.
-  // User requested: "compilar y no solo compilar y ejecutar, y si le puedes
-  // añadir iconos mejor que mejor"
-
-  // Build Only
-  QAction *buildToolbarAction =
-      new QAction(QIcon::fromTheme("system-run"), tr("Compilar"), this);
-  buildToolbarAction->setToolTip(tr("Compilar Proyecto (F5)"));
-  connect(buildToolbarAction, &QAction::triggered, this,
-          &MainWindow::onBuildProject);
-  toolbar->addAction(buildToolbarAction);
-
-  // Build & Run
-  QAction *buildRunToolbarAction =
-      new QAction(QIcon::fromTheme("media-playback-start"),
-                  tr("Compilar y Ejecutar"), this);
-  buildRunToolbarAction->setToolTip(tr("Compilar y Ejecutar (Ctrl+F9)"));
-  connect(buildRunToolbarAction, &QAction::triggered, this,
-          &MainWindow::onBuildAndRun);
-  toolbar->addAction(buildRunToolbarAction);
-
-  // --- SCENE EDITOR TOOLS ---
-  m_sceneToolbar = addToolBar(tr("Editor de Durezas / Interacción"));
+  // Scene Toolbar
+  m_sceneToolbar = addToolBar(tr("Interacción"));
   m_sceneToolbar->setObjectName("SceneInteractionToolbar");
   m_sceneToolbar->setVisible(false);
 
   m_paintInteractionAction = m_sceneToolbar->addAction(
       QIcon::fromTheme("draw-brush"), tr("Pintar Dureza"));
   m_paintInteractionAction->setCheckable(true);
-  m_paintInteractionAction->setToolTip(
-      tr("Pintar áreas de interacción/durezas manualmente"));
   connect(m_paintInteractionAction, &QAction::toggled, this,
           &MainWindow::onToggleInteractionPaint);
 
-  m_clearInteractionAction = m_sceneToolbar->addAction(
-      QIcon::fromTheme("edit-clear"), tr("Limpiar Capa"));
-  m_clearInteractionAction->setToolTip(
-      tr("Borrar todo lo pintado en esta escena"));
-
-  connect(m_clearInteractionAction, &QAction::triggered, this,
-          &MainWindow::onClearInteractionPaint);
-
-  m_brushSizeSpin = new QSpinBox();
-  m_brushSizeSpin->setRange(1, 150);
-  m_brushSizeSpin->setValue(32);
-  connect(m_brushSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
-          &MainWindow::onBrushSizeChanged);
-
-  m_sceneToolbar->addWidget(new QLabel(tr(" Pincel: ")));
-  m_sceneToolbar->addWidget(m_brushSizeSpin);
-
-  QPushButton *colorBtn = new QPushButton(tr("Color"));
-  colorBtn->setToolTip(tr("Cambiar color del pincel"));
-  connect(colorBtn, &QPushButton::clicked, this, [this]() {
-    SceneEditor *sceneEditor =
-        qobject_cast<SceneEditor *>(m_tabWidget->currentWidget());
-    if (sceneEditor) {
-      QColor col =
-          QColorDialog::getColor(Qt::red, this, tr("Color de Interacción"));
-      if (col.isValid()) {
-        sceneEditor->setBrushColor(col);
-      }
-    }
-  });
-  m_sceneToolbar->addWidget(colorBtn);
+  m_sceneToolbar->addAction(QIcon::fromTheme("edit-clear"), tr("Limpiar"), this,
+                            &MainWindow::onClearInteractionPaint);
 }
 
 void MainWindow::createDockWindows() {
-  qDebug() << "Creating Sector Dock...";
-  // Sector properties dock
-  m_sectorDock = new QDockWidget(tr("Propiedades del Sector"), this);
-  m_sectorDock->setObjectName("SectorDock");
-  QWidget *sectorWidget = new QWidget();
-  QVBoxLayout *sectorLayout = new QVBoxLayout();
+  qDebug() << "Creating Sector List Dock...";
+  // Sector tree dock (hierarchical with groups)
+  m_sectorListDock = new QDockWidget(tr("Sectores"), this);
+  m_sectorListDock->setObjectName("SectorListDock");
+  m_sectorListDock->setAllowedAreas(Qt::LeftDockWidgetArea |
+                                    Qt::RightDockWidgetArea);
+
+  m_sectorTree = new QTreeWidget();
+  m_sectorTree->setHeaderHidden(true);
+  m_sectorTree->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(m_sectorTree, &QTreeWidget::itemClicked, this,
+          &MainWindow::onSectorTreeItemClicked);
+  connect(m_sectorTree, &QTreeWidget::itemDoubleClicked, this,
+          &MainWindow::onSectorTreeItemDoubleClicked);
+  connect(m_sectorTree, &QTreeWidget::customContextMenuRequested, this,
+          &MainWindow::onSectorTreeContextMenu);
+  m_sectorListDock->setWidget(m_sectorTree);
+  addDockWidget(Qt::LeftDockWidgetArea, m_sectorListDock);
+
+  qDebug() << "Creating Unified Properties Dock...";
+  // Unified Properties Dock with Tabs
+  m_propertiesDock = new QDockWidget(tr("Propiedades"), this);
+  m_propertiesDock->setObjectName("PropertiesDock");
+  m_propertiesTabs = new QTabWidget();
+  m_propertiesDock->setWidget(m_propertiesTabs);
+  addDockWidget(Qt::RightDockWidgetArea, m_propertiesDock);
+
+  // --- 1. SECTOR TAB ---
+  m_sectorPanel = new QWidget();
+  QVBoxLayout *sectorLayout = new QVBoxLayout(m_sectorPanel);
 
   m_sectorIdLabel = new QLabel(tr("Ningún sector seleccionado"));
   sectorLayout->addWidget(m_sectorIdLabel);
 
   QGroupBox *heightGroup = new QGroupBox(tr("Alturas"));
-  QVBoxLayout *heightLayout = new QVBoxLayout();
+  QVBoxLayout *heightLayout = new QVBoxLayout(heightGroup);
 
   QHBoxLayout *floorLayout = new QHBoxLayout();
   floorLayout->addWidget(new QLabel(tr("Suelo Z:")));
@@ -610,12 +690,10 @@ void MainWindow::createDockWindows() {
           &MainWindow::onSectorCeilingZChanged);
   ceilingLayout->addWidget(m_sectorCeilingZSpin);
   heightLayout->addLayout(ceilingLayout);
-
-  heightGroup->setLayout(heightLayout);
   sectorLayout->addWidget(heightGroup);
 
   QGroupBox *textureGroup = new QGroupBox(tr("Texturas"));
-  QVBoxLayout *textureLayout = new QVBoxLayout();
+  QVBoxLayout *textureLayout = new QVBoxLayout(textureGroup);
 
   QHBoxLayout *floorTexLayout = new QHBoxLayout();
   floorTexLayout->addWidget(new QLabel(tr("Suelo:")));
@@ -626,7 +704,6 @@ void MainWindow::createDockWindows() {
   floorTexLayout->addWidget(m_sectorFloorTextureSpin);
   QPushButton *selectFloorBtn = new QPushButton(tr("..."));
   selectFloorBtn->setMaximumWidth(30);
-  selectFloorBtn->setToolTip(tr("Seleccionar textura"));
   connect(selectFloorBtn, &QPushButton::clicked, this,
           &MainWindow::onSelectSectorFloorTexture);
   floorTexLayout->addWidget(selectFloorBtn);
@@ -642,93 +719,65 @@ void MainWindow::createDockWindows() {
   ceilingTexLayout->addWidget(m_sectorCeilingTextureSpin);
   QPushButton *selectCeilingBtn = new QPushButton(tr("..."));
   selectCeilingBtn->setMaximumWidth(30);
-  selectCeilingBtn->setToolTip(tr("Seleccionar textura"));
   connect(selectCeilingBtn, &QPushButton::clicked, this,
           &MainWindow::onSelectSectorCeilingTexture);
   ceilingTexLayout->addWidget(selectCeilingBtn);
   textureLayout->addLayout(ceilingTexLayout);
-
-  textureGroup->setLayout(textureLayout);
   sectorLayout->addWidget(textureGroup);
 
   sectorLayout->addStretch();
-  sectorWidget->setLayout(sectorLayout);
-  m_sectorDock->setWidget(sectorWidget);
-  addDockWidget(Qt::RightDockWidgetArea, m_sectorDock);
+  m_propertiesTabs->addTab(m_sectorPanel, tr("Sector"));
 
-  qDebug() << "Creating Wall Dock...";
-  // Wall properties dock
-  m_wallDock = new QDockWidget(tr("Propiedades de la Pared"), this);
-  m_wallDock->setObjectName("WallDock");
-  QWidget *wallWidget = new QWidget();
-  QVBoxLayout *wallLayout = new QVBoxLayout();
+  // --- 2. WALL TAB ---
+  m_wallPanel = new QWidget();
+  QVBoxLayout *wallLayout = new QVBoxLayout(m_wallPanel);
 
   m_wallIdLabel = new QLabel(tr("Ninguna pared seleccionada"));
   wallLayout->addWidget(m_wallIdLabel);
 
   QGroupBox *wallTexGroup =
       new QGroupBox(tr("Texturas (Inferior/Media/Superior)"));
-  QVBoxLayout *wallTexLayout = new QVBoxLayout();
+  QVBoxLayout *wallTexLayout = new QVBoxLayout(wallTexGroup);
 
-  QHBoxLayout *lowerLayout = new QHBoxLayout();
-  lowerLayout->addWidget(new QLabel(tr("Inferior:")));
-  m_wallTextureLowerSpin = new QSpinBox();
-  m_wallTextureLowerSpin->setRange(0, 9999);
-  connect(m_wallTextureLowerSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-          this, &MainWindow::onWallTextureLowerChanged);
-  lowerLayout->addWidget(m_wallTextureLowerSpin);
-  QPushButton *selectLowerBtn = new QPushButton(tr("..."));
-  selectLowerBtn->setMaximumWidth(30);
-  selectLowerBtn->setToolTip(tr("Seleccionar textura"));
-  connect(selectLowerBtn, &QPushButton::clicked, this,
-          &MainWindow::onSelectWallTextureLower);
-  lowerLayout->addWidget(selectLowerBtn);
-  wallTexLayout->addLayout(lowerLayout);
+  auto createTextureRow = [this](const QString &label, QSpinBox *&spin,
+                                 void (MainWindow::*slot)(),
+                                 void (MainWindow::*valSlot)(int)) {
+    QHBoxLayout *hLayout = new QHBoxLayout();
+    hLayout->addWidget(new QLabel(label));
+    spin = new QSpinBox();
+    spin->setRange(0, 9999);
+    connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), this, valSlot);
+    hLayout->addWidget(spin);
+    QPushButton *btn = new QPushButton(tr("..."));
+    btn->setMaximumWidth(30);
+    connect(btn, &QPushButton::clicked, this, slot);
+    hLayout->addWidget(btn);
+    return hLayout;
+  };
 
-  QHBoxLayout *middleLayout = new QHBoxLayout();
-  middleLayout->addWidget(new QLabel(tr("Media:")));
-  m_wallTextureMiddleSpin = new QSpinBox();
-  m_wallTextureMiddleSpin->setRange(0, 9999);
-  connect(m_wallTextureMiddleSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-          this, &MainWindow::onWallTextureMiddleChanged);
-  middleLayout->addWidget(m_wallTextureMiddleSpin);
-  QPushButton *selectMiddleBtn = new QPushButton(tr("..."));
-  selectMiddleBtn->setMaximumWidth(30);
-  selectMiddleBtn->setToolTip(tr("Seleccionar textura"));
-  connect(selectMiddleBtn, &QPushButton::clicked, this,
-          &MainWindow::onSelectWallTextureMiddle);
-  middleLayout->addWidget(selectMiddleBtn);
-  wallTexLayout->addLayout(middleLayout);
+  wallTexLayout->addLayout(
+      createTextureRow(tr("Inferior:"), m_wallTextureLowerSpin,
+                       &MainWindow::onSelectWallTextureLower,
+                       &MainWindow::onWallTextureLowerChanged));
+  wallTexLayout->addLayout(
+      createTextureRow(tr("Media:"), m_wallTextureMiddleSpin,
+                       &MainWindow::onSelectWallTextureMiddle,
+                       &MainWindow::onWallTextureMiddleChanged));
+  wallTexLayout->addLayout(
+      createTextureRow(tr("Superior:"), m_wallTextureUpperSpin,
+                       &MainWindow::onSelectWallTextureUpper,
+                       &MainWindow::onWallTextureUpperChanged));
 
-  QHBoxLayout *upperLayout = new QHBoxLayout();
-  upperLayout->addWidget(new QLabel(tr("Superior:")));
-  m_wallTextureUpperSpin = new QSpinBox();
-  m_wallTextureUpperSpin->setRange(0, 9999);
-  connect(m_wallTextureUpperSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-          this, &MainWindow::onWallTextureUpperChanged);
-  upperLayout->addWidget(m_wallTextureUpperSpin);
-  QPushButton *selectUpperBtn = new QPushButton(tr("..."));
-  selectUpperBtn->setMaximumWidth(30);
-  selectUpperBtn->setToolTip(tr("Seleccionar textura"));
-  connect(selectUpperBtn, &QPushButton::clicked, this,
-          &MainWindow::onSelectWallTextureUpper);
-  upperLayout->addWidget(selectUpperBtn);
-  wallTexLayout->addLayout(upperLayout);
-
-  wallTexGroup->setLayout(wallTexLayout);
   wallLayout->addWidget(wallTexGroup);
 
-  // Button to apply texture to all walls
   QPushButton *applyAllBtn = new QPushButton(
       tr("Aplicar textura media a TODAS las paredes del sector"));
-  applyAllBtn->setToolTip(
-      tr("Aplica la textura media actual a todas las paredes de este sector"));
   connect(applyAllBtn, &QPushButton::clicked, this,
           &MainWindow::onApplyTextureToAllWalls);
   wallLayout->addWidget(applyAllBtn);
 
   QGroupBox *splitGroup = new QGroupBox(tr("Divisiones de Textura (Z)"));
-  QVBoxLayout *splitLayout = new QVBoxLayout();
+  QVBoxLayout *splitLayout = new QVBoxLayout(splitGroup);
 
   QHBoxLayout *splitLowerLayout = new QHBoxLayout();
   splitLowerLayout->addWidget(new QLabel(tr("Inferior:")));
@@ -751,175 +800,62 @@ void MainWindow::createDockWindows() {
           &MainWindow::onWallSplitUpperChanged);
   splitUpperLayout->addWidget(m_wallSplitUpperSpin);
   splitLayout->addLayout(splitUpperLayout);
-
-  splitGroup->setLayout(splitLayout);
   wallLayout->addWidget(splitGroup);
 
-  // --- SPECIAL PORTAL TEXTURE GROUP (User Request) ---
   m_portalTexGroup = new QGroupBox(tr("Texturas de Portal"));
-  QVBoxLayout *portalTexLayout = new QVBoxLayout();
+  QVBoxLayout *portalTexLayout = new QVBoxLayout(m_portalTexGroup);
 
-  QHBoxLayout *portalUpperLayout = new QHBoxLayout();
-  portalUpperLayout->addWidget(new QLabel(tr("Escalón Superior:")));
-  m_portalUpperSpin = new QSpinBox();
-  m_portalUpperSpin->setRange(0, 9999);
-  connect(m_portalUpperSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
-          &MainWindow::onPortalUpperChanged);
-  portalUpperLayout->addWidget(m_portalUpperSpin);
-  QPushButton *selPortalUpBtn = new QPushButton(tr("..."));
-  selPortalUpBtn->setMaximumWidth(30);
-  connect(selPortalUpBtn, &QPushButton::clicked, this,
-          &MainWindow::onSelectPortalUpper);
-  portalUpperLayout->addWidget(selPortalUpBtn);
-  portalTexLayout->addLayout(portalUpperLayout);
+  portalTexLayout->addLayout(createTextureRow(
+      tr("Escalón Superior:"), m_portalUpperSpin,
+      &MainWindow::onSelectPortalUpper, &MainWindow::onPortalUpperChanged));
+  portalTexLayout->addLayout(createTextureRow(
+      tr("Escalón Inferior:"), m_portalLowerSpin,
+      &MainWindow::onSelectPortalLower, &MainWindow::onPortalLowerChanged));
 
-  QHBoxLayout *portalLowerLayout = new QHBoxLayout();
-  portalLowerLayout->addWidget(new QLabel(tr("Escalón Inferior:")));
-  m_portalLowerSpin = new QSpinBox();
-  m_portalLowerSpin->setRange(0, 9999);
-  connect(m_portalLowerSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
-          &MainWindow::onPortalLowerChanged);
-  portalLowerLayout->addWidget(m_portalLowerSpin);
-  QPushButton *selPortalDownBtn = new QPushButton(tr("..."));
-  selPortalDownBtn->setMaximumWidth(30);
-  connect(selPortalDownBtn, &QPushButton::clicked, this,
-          &MainWindow::onSelectPortalLower);
-  portalLowerLayout->addWidget(selPortalDownBtn);
-  portalTexLayout->addLayout(portalLowerLayout);
-
-  m_portalTexGroup->setLayout(portalTexLayout);
-  m_portalTexGroup->setVisible(false); // Hidden by default
+  m_portalTexGroup->setVisible(false);
   wallLayout->addWidget(m_portalTexGroup);
-  // ----------------------------------------------------
 
   wallLayout->addStretch();
-  wallWidget->setLayout(wallLayout);
-  m_wallDock->setWidget(wallWidget);
-  addDockWidget(Qt::RightDockWidgetArea, m_wallDock);
+  m_propertiesTabs->addTab(m_wallPanel, tr("Pared"));
 
-  qDebug() << "Creating Shared Scene Entities Dock...";
-  // --- SCENE ENTITIES DOCK (Unified) ---
+  // --- 3. ENTITY TAB ---
+  m_entityPanel = new EntityPropertyPanel();
+  connect(m_entityPanel, &EntityPropertyPanel::entityChanged, this,
+          &MainWindow::onEntityChanged);
+  connect(m_entityPanel, &EntityPropertyPanel::editBehaviorRequested, this,
+          &MainWindow::onEditEntityBehavior);
+  m_propertiesTabs->addTab(m_entityPanel, tr("Entidad"));
+
+  // Other docks
   m_sceneEntitiesDock = new QDockWidget(tr("Entidades de Escena"), this);
   m_sceneEntitiesDock->setObjectName("SceneEntitiesDock");
   m_sceneEntitiesTree = new QTreeWidget();
   m_sceneEntitiesTree->setHeaderLabels(QStringList() << "Nombre" << "Tipo");
   m_sceneEntitiesTree->setContextMenuPolicy(Qt::CustomContextMenu);
   m_sceneEntitiesDock->setWidget(m_sceneEntitiesTree);
-  m_sceneEntitiesDock->setVisible(false); // Hidden unless a scene is open
+  m_sceneEntitiesDock->setVisible(false);
   addDockWidget(Qt::RightDockWidgetArea, m_sceneEntitiesDock);
-  tabifyDockWidget(m_wallDock, m_sceneEntitiesDock);
+  tabifyDockWidget(m_propertiesDock, m_sceneEntitiesDock);
 
-  // Connect context menu for the shared tree
-  connect(
-      m_sceneEntitiesTree, &QTreeWidget::customContextMenuRequested,
-      [this](const QPoint &pos) {
-        SceneEditor *editor =
-            qobject_cast<SceneEditor *>(m_tabWidget->currentWidget());
-        if (!editor)
-          return;
-
-        QTreeWidgetItem *item = m_sceneEntitiesTree->itemAt(pos);
-        if (!item)
-          return;
-
-        SceneEntity *ent = static_cast<SceneEntity *>(
-            item->data(0, Qt::UserRole).value<void *>());
-        if (!ent)
-          return;
-
-        QMenu menu;
-        menu.addAction("Editar Hitbox...", [this, editor, ent]() {
-          QDialog dlg(this);
-          dlg.setWindowTitle("Editar Hitbox Manual");
-          QFormLayout layout(&dlg);
-
-          QSpinBox wSpin, hSpin, xSpin, ySpin;
-          wSpin.setRange(0, 9999);
-          wSpin.setValue(ent->hitW);
-          hSpin.setRange(0, 9999);
-          hSpin.setValue(ent->hitH);
-          xSpin.setRange(-9999, 9999);
-          xSpin.setValue(ent->hitX);
-          ySpin.setRange(-9999, 9999);
-          ySpin.setValue(ent->hitY);
-
-          layout.addRow("Ancho (0=Auto):", &wSpin);
-          layout.addRow("Alto (0=Auto):", &hSpin);
-          layout.addRow("Offset X:", &xSpin);
-          layout.addRow("Offset Y:", &ySpin);
-
-          QDialogButtonBox btns(QDialogButtonBox::Ok |
-                                QDialogButtonBox::Cancel);
-          layout.addRow(&btns);
-          connect(&btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-          connect(&btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-
-          if (dlg.exec() == QDialog::Accepted) {
-            ent->hitW = wSpin.value();
-            ent->hitH = hSpin.value();
-            ent->hitX = xSpin.value();
-            ent->hitY = ySpin.value();
-
-            if (!editor->currentFile().isEmpty()) {
-              editor->saveScene(editor->currentFile());
-              onSceneSaved(editor->currentFile());
-            }
-          }
-        });
-        menu.addAction("Eliminar", [this, editor, ent]() {
-          if (QMessageBox::question(this, "Eliminar",
-                                    "¿Eliminar entidad " + ent->name + "?") ==
-              QMessageBox::Yes) {
-            editor->sceneData().entities.removeOne(ent);
-            if (ent->item)
-              editor->scene()->removeItem(ent->item);
-            // No delete ent yet to be safe, or sync with sceneeditor
-            // cleanup
-            updateSceneEntityTree(editor);
-
-            // Realtime Update logic
-            if (!editor->currentFile().isEmpty()) {
-              editor->saveScene(editor->currentFile());
-              onSceneSaved(editor->currentFile());
-            }
-          }
-        });
-        menu.exec(m_sceneEntitiesTree->viewport()->mapToGlobal(pos));
-      });
-
-  // === CONSOLE DOCK ===
-  // Console Dock is created in setupBuildSystem() to ensure BuildManager is
-  // also created So we don't create it here to avoid duplication. However, we
-  // need to ensure setupBuildSystem() is called in constructor.
-
-  qDebug() << "Creating Code Preview Dock...";
-  // === CODE PREVIEW DOCK ===
   m_codePreviewDock = new QDockWidget(tr("Vista Previa de Código"), this);
   m_codePreviewDock->setObjectName("CodePreviewDock");
   m_codePreviewPanel = new CodePreviewPanel(this);
   connect(m_codePreviewPanel, &CodePreviewPanel::openInEditorRequested, this,
           &MainWindow::onCodePreviewOpenRequested);
-
   m_codePreviewDock->setWidget(m_codePreviewPanel);
   addDockWidget(Qt::RightDockWidgetArea, m_codePreviewDock);
+  tabifyDockWidget(m_propertiesDock, m_codePreviewDock);
 
-  qDebug() << "Creating Asset Browser Dock...";
-  // --- ASSET BROWSER ---
-  // Created here to ensure correct tab order/stacking
   m_assetBrowser = new AssetBrowser(this);
   m_assetDock = new QDockWidget(tr("Explorador de Archivos"), this);
-  m_assetDock->setObjectName(
-      "AssetBrowserDock_v3_Left"); // Force layout reset to left
+  m_assetDock->setObjectName("AssetBrowserDock_v3_Left");
   m_assetDock->setWidget(m_assetBrowser);
   m_assetDock->setAllowedAreas(Qt::RightDockWidgetArea |
                                Qt::LeftDockWidgetArea);
   addDockWidget(Qt::LeftDockWidgetArea, m_assetDock);
 
-  // Connect Asset Browser signals
   connect(m_assetBrowser, &AssetBrowser::mapFileRequested, this,
-          [this](const QString &path) {
-            openMapFile(path); // Use openMapFile instead of QMessageBox
-          });
+          [this](const QString &path) { openMapFile(path); });
   connect(m_assetBrowser, &AssetBrowser::fileClicked, this,
           [this](const QString &path) {
             if (path.endsWith(".prg") || path.endsWith(".inc") ||
@@ -931,160 +867,17 @@ void MainWindow::createDockWindows() {
           });
   connect(m_assetBrowser, &AssetBrowser::fpgEditorRequested, this,
           [this](const QString &path) {
-            qDebug() << "Opening FPG Editor for:" << path;
-
-            // Open FPG Editor window
             if (!m_fpgEditor) {
               m_fpgEditor = new FPGEditor(this);
               connect(m_fpgEditor, &FPGEditor::fpgReloaded, this,
                       &MainWindow::onFPGReloaded);
             }
-
-            // Load the selected FPG file
             m_fpgEditor->setFPGPath(path);
             m_fpgEditor->loadFPG();
-
-            // Show and activate the editor
             m_fpgEditor->show();
             m_fpgEditor->raise();
             m_fpgEditor->activateWindow();
           });
-  connect(m_assetBrowser, &AssetBrowser::fileDoubleClicked, this,
-          [this](const QString &path) {
-            QFileInfo info(path);
-            QString ext = info.suffix().toLower();
-
-            // Open .prg and .h files in code editor
-            if (ext == "prg" || ext == "h" || ext == "inc" || ext == "c") {
-              onOpenCodeEditor(path);
-            } else if (ext == "scn" || ext == "2d") {
-              onOpenScene(path);
-            } else if (ext == "fpg") {
-              emit m_assetBrowser->fpgEditorRequested(path);
-            }
-          });
-
-  qDebug() << "Creating Sector List Dock...";
-  // Sector tree dock (hierarchical with groups)
-  m_sectorListDock = new QDockWidget(tr("Sectores"), this);
-  m_sectorListDock->setObjectName("SectorListDock");
-  m_sectorListDock->setAllowedAreas(Qt::LeftDockWidgetArea |
-                                    Qt::RightDockWidgetArea);
-
-  m_sectorTree = new QTreeWidget();
-  m_sectorTree->setHeaderHidden(
-      true); // Hide header to avoid duplication with dock title
-  m_sectorTree->setContextMenuPolicy(Qt::CustomContextMenu);
-  connect(m_sectorTree, &QTreeWidget::itemClicked, this,
-          &MainWindow::onSectorTreeItemClicked);
-  connect(m_sectorTree, &QTreeWidget::itemDoubleClicked, this,
-          &MainWindow::onSectorTreeItemDoubleClicked);
-  connect(m_sectorTree, &QTreeWidget::customContextMenuRequested, this,
-          &MainWindow::onSectorTreeContextMenu);
-  m_sectorListDock->setWidget(m_sectorTree);
-  addDockWidget(Qt::LeftDockWidgetArea, m_sectorListDock);
-
-  qDebug() << "Creating Entity Properties Dock...";
-  // Entity Properties Dock
-  m_entityDock = new QDockWidget(tr("Propiedades de Entidad"), this);
-  m_entityDock->setObjectName("EntityDock");
-  m_entityPanel = new EntityPropertyPanel();
-  connect(m_entityPanel, &EntityPropertyPanel::entityChanged, this,
-          &MainWindow::onEntityChanged);
-  m_entityDock->setWidget(m_entityPanel);
-  addDockWidget(Qt::RightDockWidgetArea, m_entityDock);
-
-  /* DECAL DOCK DISABLED - Replaced by FPG Editor
-  // Decal Properties Dock
-  m_decalDock = new QDockWidget(tr("Propiedades del Decal"), this);
-  QWidget *decalWidget = new QWidget();
-  QFormLayout *decalLayout = new QFormLayout();
-
-  m_decalIdLabel = new QLabel(tr("Ninguno"));
-  decalLayout->addRow(tr("ID:"), m_decalIdLabel);
-
-  m_decalXSpin = new QDoubleSpinBox();
-  m_decalXSpin->setRange(-100000, 100000);
-  m_decalXSpin->setDecimals(1);
-  connect(m_decalXSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-          this, &MainWindow::onDecalXChanged);
-  decalLayout->addRow(tr("Posición X:"), m_decalXSpin);
-
-  m_decalYSpin = new QDoubleSpinBox();
-  m_decalYSpin->setRange(-100000, 100000);
-  m_decalYSpin->setDecimals(1);
-  connect(m_decalYSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-          this, &MainWindow::onDecalYChanged);
-  decalLayout->addRow(tr("Posición Y:"), m_decalYSpin);
-
-  m_decalWidthSpin = new QDoubleSpinBox();
-  m_decalWidthSpin->setRange(1, 10000);
-  m_decalWidthSpin->setValue(100);
-  m_decalWidthSpin->setDecimals(1);
-  connect(m_decalWidthSpin,
-  QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-  &MainWindow::onDecalWidthChanged); decalLayout->addRow(tr("Ancho:"),
-  m_decalWidthSpin);
-
-  m_decalHeightSpin = new QDoubleSpinBox();
-  m_decalHeightSpin->setRange(1, 10000);
-  m_decalHeightSpin->setValue(100);
-  m_decalHeightSpin->setDecimals(1);
-  connect(m_decalHeightSpin,
-  QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-  &MainWindow::onDecalHeightChanged); decalLayout->addRow(tr("Alto:"),
-  m_decalHeightSpin);
-
-  m_decalRotationSpin = new QDoubleSpinBox();
-  m_decalRotationSpin->setRange(0, 360);
-  m_decalRotationSpin->setSuffix("°");
-  m_decalRotationSpin->setDecimals(1);
-  connect(m_decalRotationSpin,
-  QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-  &MainWindow::onDecalRotationChanged); decalLayout->addRow(tr("Rotación:"),
-  m_decalRotationSpin);
-
-  QHBoxLayout *decalTexLayout = new QHBoxLayout();
-  m_decalTextureSpin = new QSpinBox();
-  m_decalTextureSpin->setRange(0, 9999);
-  connect(m_decalTextureSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-          this, &MainWindow::onDecalTextureChanged);
-  decalTexLayout->addWidget(m_decalTextureSpin);
-
-  QPushButton *selectDecalTexBtn = new QPushButton(tr("..."));
-  selectDecalTexBtn->setMaximumWidth(30);
-  connect(selectDecalTexBtn, &QPushButton::clicked,
-          this, &MainWindow::onSelectDecalTexture);
-  decalTexLayout->addWidget(selectDecalTexBtn);
-  decalLayout->addRow(tr("Textura:"), decalTexLayout);
-
-  m_decalAlphaSpin = new QDoubleSpinBox();
-  m_decalAlphaSpin->setRange(0.0, 1.0);
-  m_decalAlphaSpin->setValue(1.0);
-  m_decalAlphaSpin->setSingleStep(0.1);
-  m_decalAlphaSpin->setDecimals(2);
-  connect(m_decalAlphaSpin,
-  QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-  &MainWindow::onDecalAlphaChanged); decalLayout->addRow(tr("Opacidad:"),
-  m_decalAlphaSpin);
-
-  m_decalRenderOrderSpin = new QSpinBox();
-  m_decalRenderOrderSpin->setRange(-100, 100);
-  m_decalRenderOrderSpin->setValue(0);
-  connect(m_decalRenderOrderSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-          this, &MainWindow::onDecalRenderOrderChanged);
-  decalLayout->addRow(tr("Orden:"), m_decalRenderOrderSpin);
-
-  m_deleteDecalButton = new QPushButton(tr("Eliminar Decal"));
-  connect(m_deleteDecalButton, &QPushButton::clicked,
-          this, &MainWindow::onDeleteDecal);
-  decalLayout->addRow(m_deleteDecalButton);
-
-  decalWidget->setLayout(decalLayout);
-  m_decalDock->setWidget(decalWidget);
-  addDockWidget(Qt::RightDockWidgetArea, m_decalDock);
-  m_decalDock->hide(); // Hidden by default
-  */
 }
 
 void MainWindow::createStatusBar() {
@@ -1102,8 +895,8 @@ void MainWindow::onNewMap() {
   GridEditor *editor = new GridEditor(this);
   // Note: GridEditor now owns its MapData (initialized in its constructor)
 
-  editor->setEditMode(
-      static_cast<GridEditor::EditMode>(m_modeCombo->currentIndex()));
+  editor->setEditMode(static_cast<GridEditor::EditMode>(
+      m_modeGroup->checkedAction()->data().toInt()));
   editor->showGrid(m_viewGridAction->isChecked());
 
   // Connect signals
@@ -1243,8 +1036,8 @@ void MainWindow::onImportWLD() {
   if (WLDImporter::importWLD(filename, *editor->mapData())) {
     // Setup editor
     editor->setFileName(""); // Imported, so no filename yet
-    editor->setEditMode(
-        static_cast<GridEditor::EditMode>(m_modeCombo->currentIndex()));
+    editor->setEditMode(static_cast<GridEditor::EditMode>(
+        m_modeGroup->checkedAction()->data().toInt()));
     editor->showGrid(m_viewGridAction->isChecked());
     editor->setTextures(m_textureCache);
 
@@ -1512,10 +1305,19 @@ void MainWindow::onToggleVisualMode() {
  */
 
 void MainWindow::onModeChanged(int index) {
+  // Sync toolbar actions if called from elsewhere
+  if (m_modeGroup) {
+    for (QAction *action : m_modeGroup->actions()) {
+      if (action->data().toInt() == index) {
+        action->setChecked(true);
+        break;
+      }
+    }
+  }
+
   GridEditor *editor = getCurrentEditor();
   if (editor) {
-    int modeId = m_modeCombo->itemData(index).toInt();
-    editor->setEditMode(static_cast<GridEditor::EditMode>(modeId));
+    editor->setEditMode(static_cast<GridEditor::EditMode>(index));
   }
 }
 
@@ -1534,6 +1336,10 @@ void MainWindow::onTextureSelected(int textureId) {
 void MainWindow::onSectorSelected(int sectorId) {
   m_selectedSectorId = sectorId;
   updateSectorPanel();
+
+  if (m_propertiesTabs) {
+    m_propertiesTabs->setCurrentWidget(m_sectorPanel);
+  }
 
   // Sync list selection
   if (m_sectorTree) {
@@ -1706,6 +1512,9 @@ void MainWindow::onWallSelected(int sectorIndex, int wallIndex) {
   m_selectedSectorId = sectorIndex;
   m_selectedWallId = wallIndex;
   updateWallPanel();
+  if (m_propertiesTabs) {
+    m_propertiesTabs->setCurrentWidget(m_wallPanel);
+  }
 }
 
 void MainWindow::onWallTextureLowerChanged(int value) {
@@ -3086,7 +2895,7 @@ void MainWindow::onInsertBox() {
 
   if (msgBox.exec() == QMessageBox::Yes) {
     // Enable manual portal mode
-    m_manualPortalsButton->setChecked(true);
+    m_manualPortalModeAction->setChecked(true);
     onToggleManualPortals(true);
   }
 }
@@ -3335,7 +3144,7 @@ void MainWindow::onDecalPlaced(float x, float y) {
     return;
   auto *map = editor->mapData();
 
-  int mode = m_modeCombo->currentIndex();
+  int mode = m_modeGroup->checkedAction()->data().toInt();
   bool isFloor = (mode == 7); // "Colocar Decal Suelo"
 
   // Find which sector contains this point
@@ -3763,19 +3572,19 @@ void MainWindow::onTabChanged(int index) {
 
   if (editor) {
     m_sceneEntitiesDock->setVisible(false);
-    m_sectorDock->setVisible(true);
-    m_wallDock->setVisible(true);
-    m_sectorListDock->setVisible(true);
-    m_entityDock->setVisible(true);
+    if (m_propertiesDock)
+      m_propertiesDock->setVisible(true);
+    if (m_sectorListDock)
+      m_sectorListDock->setVisible(true);
     updateSectorList();
     updateSectorPanel();
     updateWallPanel();
   } else if (sceneEditor) {
     m_sceneEntitiesDock->setVisible(true);
-    m_sectorDock->setVisible(false);
-    m_wallDock->setVisible(false);
-    m_sectorListDock->setVisible(false);
-    m_entityDock->setVisible(false);
+    if (m_propertiesDock)
+      m_propertiesDock->setVisible(false);
+    if (m_sectorListDock)
+      m_sectorListDock->setVisible(false);
     updateSceneEntityTree(sceneEditor);
   }
 
@@ -3809,8 +3618,8 @@ void MainWindow::openMapFile(const QString &filename) {
     editor->setFileName(filename);
 
     // Setup editor
-    editor->setEditMode(
-        static_cast<GridEditor::EditMode>(m_modeCombo->currentIndex()));
+    editor->setEditMode(static_cast<GridEditor::EditMode>(
+        m_modeGroup->checkedAction()->data().toInt()));
     if (m_viewGridAction) {
       editor->showGrid(m_viewGridAction->isChecked());
     }
@@ -3928,8 +3737,32 @@ void MainWindow::onCodePreviewOpenRequested(const QString &filePath) {
 void MainWindow::onEntitySelected(int index, EntityInstance entity) {
   if (m_entityPanel) {
     m_entityPanel->setEntity(index, entity);
-    // Ensure entity dock is visible?
-    // m_entityDock->show();
+    if (m_propertiesTabs) {
+      m_propertiesTabs->setCurrentWidget(m_entityPanel);
+    }
+  }
+}
+
+void MainWindow::onEditEntityBehavior(int index, const EntityInstance &entity) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor)
+    return;
+
+  // Get project info
+  QString projectPath = m_projectManager->getProjectPath();
+
+  // Get available NPC paths
+  const QVector<NPCPath> *availablePaths = &editor->mapData()->npcPaths;
+
+  // Create dialog
+  EntityBehaviorDialog dialog(entity, projectPath, availablePaths,
+                              QStringList(), this);
+  if (dialog.exec() == QDialog::Accepted) {
+    // Update entity
+    EntityInstance updatedEntity = dialog.getEntity();
+    editor->updateEntity(index, updatedEntity);
+    m_entityPanel->setEntity(index, updatedEntity);
+    editor->update();
   }
 }
 
@@ -4034,17 +3867,17 @@ void MainWindow::onSceneSelectionChanged(SceneEntity *ent) {
 
   if (ent && ent->type == ENTITY_WORLD3D) {
     // Show 3D map properties ONLY when 3D World is selected
-    m_sectorListDock->show();
-    m_sectorDock->show();
-    m_wallDock->show();
-    m_entityDock->show();
+    if (m_sectorListDock)
+      m_sectorListDock->show();
+    if (m_propertiesDock)
+      m_propertiesDock->show();
     m_sceneEntitiesDock->hide();
   } else {
     // Normal scene view: only show entities
-    m_sectorListDock->hide();
-    m_sectorDock->hide();
-    m_wallDock->hide();
-    m_entityDock->hide();
+    if (m_sectorListDock)
+      m_sectorListDock->hide();
+    if (m_propertiesDock)
+      m_propertiesDock->hide();
     m_sceneEntitiesDock->show();
   }
 }
@@ -4180,20 +4013,6 @@ void MainWindow::onManageNPCPaths() {
 
     // Mark map as modified
     editor->update();
-  }
-}
-
-void MainWindow::onEditEntityBehavior(int index, const EntityInstance &entity) {
-  GridEditor *editor = getCurrentEditor();
-  const QVector<NPCPath> *availablePaths = nullptr;
-
-  if (editor) {
-    availablePaths = &editor->mapData()->npcPaths;
-  }
-
-  EntityBehaviorDialog dialog(entity, availablePaths, QStringList(), this);
-  if (dialog.exec() == QDialog::Accepted) {
-    onEntityChanged(index, dialog.getEntity());
   }
 }
 

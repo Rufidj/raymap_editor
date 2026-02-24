@@ -259,8 +259,7 @@ int GridEditor::findWallAt(const QPointF &worldPos, float tolerance) {
       if (dist < minDist) {
         // Found a wall in the selected sector! Select it immediately.
         // We prioritize staying in the current sector context.
-        m_selectedSector = m_selectedSector; // Keep same sector
-        return w;                            // Return wall index directly
+        return w; // Return wall index directly
       }
     }
   }
@@ -346,6 +345,28 @@ int GridEditor::findSpawnFlagAt(const QPointF &worldPos, float tolerance) {
   }
 
   return closestFlag;
+}
+
+int GridEditor::findLightAt(const QPointF &worldPos, float tolerance) {
+  if (!m_mapData)
+    return -1;
+
+  float minDist = tolerance / m_zoom;
+  int closestLight = -1;
+
+  for (int i = 0; i < m_mapData->lights.size(); i++) {
+    const Light &light = m_mapData->lights[i];
+    float dx = worldPos.x() - light.x;
+    float dy = worldPos.y() - light.y;
+    float dist = std::sqrt(dx * dx + dy * dy);
+
+    if (dist < minDist) {
+      minDist = dist;
+      closestLight = i;
+    }
+  }
+
+  return closestLight;
 }
 
 int GridEditor::findEntityAt(const QPointF &worldPos, float tolerance) {
@@ -435,6 +456,9 @@ void GridEditor::paintEvent(QPaintEvent *event) {
 
   // Draw camera
   drawCamera(painter);
+
+  // Draw lights
+  drawLights(painter);
 
   // Draw current polygon being drawn
   if (m_editMode == MODE_DRAW_SECTOR && !m_currentPolygon.isEmpty()) {
@@ -847,6 +871,32 @@ void GridEditor::mousePressEvent(QMouseEvent *event) {
         m_mapData->spawnFlags.append(flag);
       }
       emit spawnFlagPlaced(flagId, worldPos.x(), worldPos.y());
+      update();
+      break;
+    }
+
+    case MODE_PLACE_LIGHT: {
+      int lightIdx = findLightAt(worldPos);
+      if (lightIdx >= 0) {
+        // Selection
+        emit lightSelected(lightIdx, m_mapData->lights[lightIdx]);
+      } else {
+        // Placement
+        Light light;
+        light.id = m_mapData ? m_mapData->lights.size() : 0;
+        light.x = worldPos.x();
+        light.y = worldPos.y();
+        light.z = 64.0f;
+        light.radius = 256.0f;
+        light.intensity = 1.0f;
+        light.color_r = 255;
+        light.color_g = 255;
+        light.color_b = 255;
+        if (m_mapData) {
+          m_mapData->lights.append(light);
+          emit lightSelected(m_mapData->lights.size() - 1, light);
+        }
+      }
       update();
       break;
     }
@@ -1466,6 +1516,35 @@ void GridEditor::drawEntities(QPainter &painter) {
     painter.setFont(QFont("Arial", 8));
     QFileInfo info(entity.assetPath);
     painter.drawText(pos + QPoint(8, 0), info.fileName());
+  }
+}
+
+void GridEditor::drawLights(QPainter &painter) {
+  if (!m_mapData)
+    return;
+
+  for (const Light &light : m_mapData->lights) {
+    QPoint pos = worldToScreen(QPointF(light.x, light.y));
+
+    // Draw light icon (a yellow circle with rays)
+    QColor lightColor(light.color_r, light.color_g, light.color_b);
+    painter.setBrush(QBrush(lightColor));
+    painter.setPen(QPen(Qt::white, 2));
+    painter.drawEllipse(pos, 6, 6);
+
+    // Draw rays
+    for (int a = 0; a < 360; a += 45) {
+      float rad = a * 3.14159f / 180.0f;
+      painter.drawLine(pos.x() + std::cos(rad) * 6, pos.y() + std::sin(rad) * 6,
+                       pos.x() + std::cos(rad) * 12,
+                       pos.y() + std::sin(rad) * 12);
+    }
+
+    // Draw radius
+    painter.setPen(QPen(lightColor, 1, Qt::DashLine));
+    painter.setBrush(Qt::NoBrush);
+    int radiusScreen = (int)(light.radius * m_zoom);
+    painter.drawEllipse(pos, radiusScreen, radiusScreen);
   }
 }
 

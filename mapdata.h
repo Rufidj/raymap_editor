@@ -78,13 +78,19 @@ struct Wall {
   float texture_split_z_lower; /* Default: 64.0 */
   float texture_split_z_upper; /* Default: 192.0 */
 
+  int texture_id_lower_normal;
+  int texture_id_middle_normal;
+  int texture_id_upper_normal;
+
   int portal_id; /* -1 = sólida, >=0 = portal */
   int flags;
 
   Wall()
       : wall_id(0), x1(0), y1(0), x2(0), y2(0), texture_id_lower(0),
         texture_id_middle(0), texture_id_upper(0), texture_split_z_lower(64.0f),
-        texture_split_z_upper(192.0f), portal_id(-1), flags(0) {}
+        texture_split_z_upper(192.0f), texture_id_lower_normal(0),
+        texture_id_middle_normal(0), texture_id_upper_normal(0), portal_id(-1),
+        flags(0) {}
 };
 
 /* ============================================================================
@@ -112,6 +118,10 @@ struct Sector {
   int floor_texture_id;
   int ceiling_texture_id;
 
+  /* Normal Maps */
+  int floor_normal_id;
+  int ceiling_normal_id;
+
   /* Iluminación */
   int light_level;
 
@@ -131,8 +141,8 @@ struct Sector {
   /* Constructor */
   Sector()
       : sector_id(0), floor_z(0.0f), ceiling_z(256.0f), floor_texture_id(0),
-        ceiling_texture_id(0), light_level(255), group_id(-1),
-        parent_sector_id(-1) {}
+        ceiling_texture_id(0), floor_normal_id(0), ceiling_normal_id(0),
+        light_level(255), group_id(-1), parent_sector_id(-1) {}
 };
 
 /* ============================================================================
@@ -378,11 +388,12 @@ struct Light {
   float radius;
   int color_r, color_g, color_b;
   float intensity;
+  float falloff; // 1=linear, 2=quadratic
   bool active;
 
   Light()
       : id(0), x(0), y(0), z(64), radius(256.0f), color_r(255), color_g(255),
-        color_b(255), intensity(1.0f), active(true) {}
+        color_b(255), intensity(1.0f), falloff(1.0f), active(true) {}
 };
 
 /* ============================================================================

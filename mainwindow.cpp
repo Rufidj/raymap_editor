@@ -237,6 +237,13 @@ void MainWindow::createActions() {
   m_manualPortalModeAction->setData(GridEditor::MODE_MANUAL_PORTAL);
   m_modeGroup->addAction(m_manualPortalModeAction);
 
+  m_placeLightModeAction =
+      new QAction(QIcon::fromTheme("light-filled"), tr("Colocar Luz"), this);
+  m_placeLightModeAction->setCheckable(true);
+  m_placeLightModeAction->setToolTip(tr("Colocar y seleccionar luces"));
+  m_placeLightModeAction->setData(GridEditor::MODE_PLACE_LIGHT);
+  m_modeGroup->addAction(m_placeLightModeAction);
+
   m_drawSectorModeAction->setChecked(true);
 
   connect(m_modeGroup, &QActionGroup::triggered, this, [this](QAction *action) {
@@ -380,6 +387,13 @@ void MainWindow::createMenus() {
           &MainWindow::onInsertPlatform);
   insertMenu->addAction(m_insertPlatformAction);
 
+  m_insertLightAction =
+      new QAction(QIcon::fromTheme("light-filled"), tr("Luz"), this);
+  m_insertLightAction->setToolTip(tr("Insertar una luz omnidireccional"));
+  connect(m_insertLightAction, &QAction::triggered, this,
+          &MainWindow::onInsertLight);
+  insertMenu->addAction(m_insertLightAction);
+
   insertMenu->addSeparator();
 
   // Sector Menu
@@ -434,6 +448,14 @@ void MainWindow::createMenus() {
   connect(objImportAction, &QAction::triggered, this,
           &MainWindow::openObjConverter);
   toolsMenu->addAction(objImportAction);
+
+  QAction *fontEditorAction =
+      new QAction(tr("Editor de Fuentes (FNT/FNX)..."), this);
+  fontEditorAction->setShortcut(QKeySequence(tr("Ctrl+Shift+F")));
+  fontEditorAction->setStatusTip(tr("Open the FNT/FNX font editor"));
+  connect(fontEditorAction, &QAction::triggered, this,
+          [this]() { onOpenFontEditor(); });
+  toolsMenu->addAction(fontEditorAction);
 
   // === BUILD MENU ===
   QMenu *buildMenu = menuBar()->addMenu(tr("&Compilar"));
@@ -527,6 +549,8 @@ void MainWindow::createToolbars() {
   m_modeToolbar->addAction(m_placeSpawnModeAction);
   m_modeToolbar->addAction(m_placeCameraModeAction);
   m_modeToolbar->addSeparator();
+  m_modeToolbar->addAction(m_placeLightModeAction);
+  m_modeToolbar->addSeparator();
   m_modeToolbar->addAction(m_manualPortalModeAction);
 
   // 3. Insertion Toolbar (Shapes and prefab objects)
@@ -536,6 +560,7 @@ void MainWindow::createToolbars() {
   m_insertToolbar->addAction(m_insertBoxAction);
   m_insertToolbar->addAction(m_insertColumnAction);
   m_insertToolbar->addAction(m_insertPlatformAction);
+  m_insertToolbar->addAction(m_insertLightAction);
   m_insertToolbar->addSeparator();
 
   // Shapes (from previous QPushButton-based implementation)
@@ -725,19 +750,8 @@ void MainWindow::createDockWindows() {
   textureLayout->addLayout(ceilingTexLayout);
   sectorLayout->addWidget(textureGroup);
 
-  sectorLayout->addStretch();
-  m_propertiesTabs->addTab(m_sectorPanel, tr("Sector"));
-
-  // --- 2. WALL TAB ---
-  m_wallPanel = new QWidget();
-  QVBoxLayout *wallLayout = new QVBoxLayout(m_wallPanel);
-
-  m_wallIdLabel = new QLabel(tr("Ninguna pared seleccionada"));
-  wallLayout->addWidget(m_wallIdLabel);
-
-  QGroupBox *wallTexGroup =
-      new QGroupBox(tr("Texturas (Inferior/Media/Superior)"));
-  QVBoxLayout *wallTexLayout = new QVBoxLayout(wallTexGroup);
+  QGroupBox *sectorNormalGroup = new QGroupBox(tr("Mapas de Normales"));
+  QVBoxLayout *sectorNormalLayout = new QVBoxLayout(sectorNormalGroup);
 
   auto createTextureRow = [this](const QString &label, QSpinBox *&spin,
                                  void (MainWindow::*slot)(),
@@ -755,6 +769,35 @@ void MainWindow::createDockWindows() {
     return hLayout;
   };
 
+  sectorNormalLayout->addLayout(
+      createTextureRow(tr("Suelo:"), m_sectorFloorNormalSpin,
+                       &MainWindow::onSelectSectorFloorNormal,
+                       &MainWindow::onSectorFloorNormalChanged));
+  sectorNormalLayout->addLayout(
+      createTextureRow(tr("Techo:"), m_sectorCeilingNormalSpin,
+                       &MainWindow::onSelectSectorCeilingNormal,
+                       &MainWindow::onSectorCeilingNormalChanged));
+
+  sectorLayout->addWidget(sectorNormalGroup);
+
+  sectorLayout->addStretch();
+  m_propertiesTabs->addTab(m_sectorPanel, tr("Sector"));
+
+  // --- 2. WALL TAB ---
+  m_wallPanel = new QWidget();
+  QVBoxLayout *wallLayout = new QVBoxLayout(m_wallPanel);
+
+  m_wallIdLabel = new QLabel(tr("Ninguna pared seleccionada"));
+  wallLayout->addWidget(m_wallIdLabel);
+
+  QGroupBox *wallTexGroup =
+      new QGroupBox(tr("Texturas (Inferior/Media/Superior)"));
+  QVBoxLayout *wallTexLayout = new QVBoxLayout(wallTexGroup);
+
+  // createTextureRow is already defined above in the sector section scope
+  // If not, I should ensure it's accessible. Since sectors and walls are in the
+  // same function, I'll define it at the beginning of createDockWindows.
+
   wallTexLayout->addLayout(
       createTextureRow(tr("Inferior:"), m_wallTextureLowerSpin,
                        &MainWindow::onSelectWallTextureLower,
@@ -769,6 +812,24 @@ void MainWindow::createDockWindows() {
                        &MainWindow::onWallTextureUpperChanged));
 
   wallLayout->addWidget(wallTexGroup);
+
+  QGroupBox *wallNormalGroup =
+      new QGroupBox(tr("Mapas de Normales (Inf/Med/Sup)"));
+  QVBoxLayout *wallNormalLayout = new QVBoxLayout(wallNormalGroup);
+  wallNormalLayout->addLayout(
+      createTextureRow(tr("Inferior:"), m_wallNormalLowerSpin,
+                       &MainWindow::onSelectWallNormalLower,
+                       &MainWindow::onWallNormalLowerChanged));
+  wallNormalLayout->addLayout(
+      createTextureRow(tr("Media:"), m_wallNormalMiddleSpin,
+                       &MainWindow::onSelectWallNormalMiddle,
+                       &MainWindow::onWallNormalMiddleChanged));
+  wallNormalLayout->addLayout(
+      createTextureRow(tr("Superior:"), m_wallNormalUpperSpin,
+                       &MainWindow::onSelectWallNormalUpper,
+                       &MainWindow::onWallNormalUpperChanged));
+
+  wallLayout->addWidget(wallNormalGroup);
 
   QPushButton *applyAllBtn = new QPushButton(
       tr("Aplicar textura media a TODAS las paredes del sector"));
@@ -826,6 +887,94 @@ void MainWindow::createDockWindows() {
           &MainWindow::onEditEntityBehavior);
   m_propertiesTabs->addTab(m_entityPanel, tr("Entidad"));
 
+  // --- 4. LIGHT TAB ---
+  m_lightPanel = new QWidget();
+  QVBoxLayout *lightLayout = new QVBoxLayout(m_lightPanel);
+
+  m_lightIdLabel = new QLabel(tr("Ninguna luz seleccionada"));
+  lightLayout->addWidget(m_lightIdLabel);
+
+  QGroupBox *lightPosGroup = new QGroupBox(tr("Posición y Radio"));
+  QFormLayout *lightPosLayout = new QFormLayout(lightPosGroup);
+
+  m_lightXSpin = new QDoubleSpinBox();
+  m_lightXSpin->setRange(-100000, 100000);
+  m_lightYSpin = new QDoubleSpinBox();
+  m_lightYSpin->setRange(-100000, 100000);
+  m_lightZSpin = new QDoubleSpinBox();
+  m_lightZSpin->setRange(-100000, 100000);
+  m_lightRadiusSpin = new QDoubleSpinBox();
+  m_lightRadiusSpin->setRange(0, 10000);
+
+  lightPosLayout->addRow(tr("X:"), m_lightXSpin);
+  lightPosLayout->addRow(tr("Y:"), m_lightYSpin);
+  lightPosLayout->addRow(tr("Z:"), m_lightZSpin);
+  lightPosLayout->addRow(tr("Radio:"), m_lightRadiusSpin);
+
+  lightLayout->addWidget(lightPosGroup);
+
+  QGroupBox *lightColorGroup = new QGroupBox(tr("Color e Intensidad"));
+  QFormLayout *lightColorLayout = new QFormLayout(lightColorGroup);
+
+  QHBoxLayout *colorRowLayout = new QHBoxLayout();
+  m_lightRSpin = new QSpinBox();
+  m_lightRSpin->setRange(0, 255);
+  m_lightGSpin = new QSpinBox();
+  m_lightGSpin->setRange(0, 255);
+  m_lightBSpin = new QSpinBox();
+  m_lightBSpin->setRange(0, 255);
+  m_lightColorButton = new QPushButton();
+  m_lightColorButton->setFixedSize(30, 20);
+  m_lightColorButton->setToolTip(tr("Seleccionar color"));
+  connect(m_lightColorButton, &QPushButton::clicked, this,
+          &MainWindow::onSelectLightColor);
+
+  colorRowLayout->addWidget(m_lightRSpin);
+  colorRowLayout->addWidget(m_lightGSpin);
+  colorRowLayout->addWidget(m_lightBSpin);
+  colorRowLayout->addWidget(m_lightColorButton);
+
+  m_lightIntensitySpin = new QDoubleSpinBox();
+  m_lightIntensitySpin->setRange(0, 10);
+  m_lightIntensitySpin->setSingleStep(0.1);
+  m_lightFalloffSpin = new QDoubleSpinBox();
+  m_lightFalloffSpin->setRange(1, 2);
+  m_lightFalloffSpin->setSingleStep(1.0);
+
+  lightColorLayout->addRow(tr("Color (RGB):"), colorRowLayout);
+  lightColorLayout->addRow(tr("Intensidad:"), m_lightIntensitySpin);
+  lightColorLayout->addRow(tr("Falloff (1=L, 2=Q):"), m_lightFalloffSpin);
+
+  lightLayout->addWidget(lightColorGroup);
+
+  m_deleteLightButton =
+      new QPushButton(QIcon::fromTheme("edit-delete"), tr("Eliminar Luz"));
+  connect(m_deleteLightButton, &QPushButton::clicked, this,
+          &MainWindow::onDeleteLight);
+  lightLayout->addWidget(m_deleteLightButton);
+
+  auto connectLight = [this](QDoubleSpinBox *spin) {
+    connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this]() { onLightChanged(); });
+  };
+  auto connectLightInt = [this](QSpinBox *spin) {
+    connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [this]() { onLightChanged(); });
+  };
+
+  connectLight(m_lightXSpin);
+  connectLight(m_lightYSpin);
+  connectLight(m_lightZSpin);
+  connectLight(m_lightRadiusSpin);
+  connectLightInt(m_lightRSpin);
+  connectLightInt(m_lightGSpin);
+  connectLightInt(m_lightBSpin);
+  connectLight(m_lightIntensitySpin);
+  connectLight(m_lightFalloffSpin);
+
+  lightLayout->addStretch();
+  m_propertiesTabs->addTab(m_lightPanel, tr("Luz"));
+
   // Other docks
   m_sceneEntitiesDock = new QDockWidget(tr("Entidades de Escena"), this);
   m_sceneEntitiesDock->setObjectName("SceneEntitiesDock");
@@ -878,6 +1027,23 @@ void MainWindow::createDockWindows() {
             m_fpgEditor->raise();
             m_fpgEditor->activateWindow();
           });
+
+  connect(m_assetBrowser, &AssetBrowser::fileDoubleClicked, this,
+          [this](const QString &path) {
+            QFileInfo info(path);
+            QString ext = info.suffix().toLower();
+
+            if (ext == "prg" || ext == "h" || ext == "inc" || ext == "c") {
+              onOpenCodeEditor(path);
+            } else if (ext == "scn" || ext == "2d") {
+              onOpenScene(path);
+            } else if (ext == "fpg") {
+              // Trigger FPG editor
+              emit m_assetBrowser->fpgEditorRequested(path);
+            } else if (ext == "fnt" || ext == "fnx") {
+              onOpenFontEditor(path);
+            }
+          });
 }
 
 void MainWindow::createStatusBar() {
@@ -913,6 +1079,8 @@ void MainWindow::onNewMap() {
           &MainWindow::onEntityChanged); // Live visual update
   connect(editor, &GridEditor::requestEditEntityBehavior, this,
           &MainWindow::onEditEntityBehavior);
+  connect(editor, &GridEditor::lightSelected, this,
+          &MainWindow::onLightSelected);
 
   // Apply current textures to it
   editor->setTextures(m_textureCache);
@@ -1057,6 +1225,8 @@ void MainWindow::onImportWLD() {
             &MainWindow::onEntitySelected);
     connect(editor, &GridEditor::entityMoved, this,
             &MainWindow::onEntityChanged);
+    connect(editor, &GridEditor::lightSelected, this,
+            &MainWindow::onLightSelected);
 
     m_tabWidget->addTab(editor,
                         tr("Importado %1").arg(QFileInfo(filename).fileName()));
@@ -2098,16 +2268,22 @@ void MainWindow::updateSectorPanel() {
     m_sectorCeilingZSpin->blockSignals(true);
     m_sectorFloorTextureSpin->blockSignals(true);
     m_sectorCeilingTextureSpin->blockSignals(true);
+    m_sectorFloorNormalSpin->blockSignals(true);
+    m_sectorCeilingNormalSpin->blockSignals(true);
 
     m_sectorFloorZSpin->setValue(sector.floor_z);
     m_sectorCeilingZSpin->setValue(sector.ceiling_z);
     m_sectorFloorTextureSpin->setValue(sector.floor_texture_id);
     m_sectorCeilingTextureSpin->setValue(sector.ceiling_texture_id);
+    m_sectorFloorNormalSpin->setValue(sector.floor_normal_id);
+    m_sectorCeilingNormalSpin->setValue(sector.ceiling_normal_id);
 
     m_sectorFloorZSpin->blockSignals(false);
     m_sectorCeilingZSpin->blockSignals(false);
     m_sectorFloorTextureSpin->blockSignals(false);
     m_sectorCeilingTextureSpin->blockSignals(false);
+    m_sectorFloorNormalSpin->blockSignals(false);
+    m_sectorCeilingNormalSpin->blockSignals(false);
 
     // Removed nested sector controls update (v9 format is flat)
 
@@ -2133,11 +2309,32 @@ void MainWindow::updateWallPanel() {
     // Show Wall Index (0..N) instead of internal wall_id which might be
     // uninitialized/duplicate
     m_wallIdLabel->setText(tr("Wall %1").arg(m_selectedWallId));
+    m_wallTextureLowerSpin->blockSignals(true);
+    m_wallTextureMiddleSpin->blockSignals(true);
+    m_wallTextureUpperSpin->blockSignals(true);
+    m_wallNormalLowerSpin->blockSignals(true);
+    m_wallNormalMiddleSpin->blockSignals(true);
+    m_wallNormalUpperSpin->blockSignals(true);
+    m_wallSplitLowerSpin->blockSignals(true);
+    m_wallSplitUpperSpin->blockSignals(true);
+
     m_wallTextureLowerSpin->setValue(wall.texture_id_lower);
     m_wallTextureMiddleSpin->setValue(wall.texture_id_middle);
     m_wallTextureUpperSpin->setValue(wall.texture_id_upper);
+    m_wallNormalLowerSpin->setValue(wall.texture_id_lower_normal);
+    m_wallNormalMiddleSpin->setValue(wall.texture_id_middle_normal);
+    m_wallNormalUpperSpin->setValue(wall.texture_id_upper_normal);
     m_wallSplitLowerSpin->setValue(wall.texture_split_z_lower);
     m_wallSplitUpperSpin->setValue(wall.texture_split_z_upper);
+
+    m_wallTextureLowerSpin->blockSignals(false);
+    m_wallTextureMiddleSpin->blockSignals(false);
+    m_wallTextureUpperSpin->blockSignals(false);
+    m_wallNormalLowerSpin->blockSignals(false);
+    m_wallNormalMiddleSpin->blockSignals(false);
+    m_wallNormalUpperSpin->blockSignals(false);
+    m_wallSplitLowerSpin->blockSignals(false);
+    m_wallSplitUpperSpin->blockSignals(false);
 
     // Portal UI
     if (wall.portal_id >= 0) {
@@ -3641,6 +3838,8 @@ void MainWindow::openMapFile(const QString &filename) {
             &MainWindow::onEntityChanged);
     connect(editor, &GridEditor::requestEditEntityBehavior, this,
             &MainWindow::onEditEntityBehavior);
+    connect(editor, &GridEditor::lightSelected, this,
+            &MainWindow::onLightSelected);
 
     m_tabWidget->addTab(editor, QFileInfo(filename).fileName());
     m_tabWidget->setCurrentWidget(editor);
@@ -3940,8 +4139,11 @@ void MainWindow::updateSceneEntityTree(SceneEditor *editor) {
   }
 }
 
-void MainWindow::onOpenFontEditor() {
+void MainWindow::onOpenFontEditor(const QString &path) {
   FontEditorDialog dialog(this);
+  if (!path.isEmpty()) {
+    dialog.loadFont(path);
+  }
   dialog.exec();
 }
 
@@ -4043,5 +4245,239 @@ void MainWindow::onBrushSizeChanged(int size) {
       qobject_cast<SceneEditor *>(m_tabWidget->currentWidget());
   if (sceneEditor) {
     sceneEditor->setBrushSize(size);
+  }
+}
+
+void MainWindow::onPlaceLightMode() {
+  GridEditor *editor = getCurrentEditor();
+  if (editor) {
+    editor->setEditMode(GridEditor::MODE_PLACE_LIGHT);
+  }
+}
+
+void MainWindow::onInsertLight() {
+  m_placeLightModeAction->setChecked(true);
+  onPlaceLightMode();
+}
+
+void MainWindow::onLightSelected(int index, Light light) {
+  m_selectedLightIndex = index;
+  m_propertiesTabs->setCurrentWidget(m_lightPanel);
+  updateLightPanel();
+}
+
+void MainWindow::onLightChanged() {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || !editor->mapData())
+    return;
+
+  if (m_selectedLightIndex >= 0 &&
+      m_selectedLightIndex < editor->mapData()->lights.size()) {
+    Light &light = editor->mapData()->lights[m_selectedLightIndex];
+    light.x = m_lightXSpin->value();
+    light.y = m_lightYSpin->value();
+    light.z = m_lightZSpin->value();
+    light.radius = m_lightRadiusSpin->value();
+    light.color_r = m_lightRSpin->value();
+    light.color_g = m_lightGSpin->value();
+    light.color_b = m_lightBSpin->value();
+    light.intensity = m_lightIntensitySpin->value();
+    light.falloff = m_lightFalloffSpin->value();
+
+    editor->update();
+    updateVisualMode();
+  }
+}
+
+void MainWindow::updateLightPanel() {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || !editor->mapData())
+    return;
+
+  if (m_selectedLightIndex >= 0 &&
+      m_selectedLightIndex < editor->mapData()->lights.size()) {
+    const Light &light = editor->mapData()->lights[m_selectedLightIndex];
+    m_lightIdLabel->setText(tr("Luz ID: %1").arg(light.id));
+
+    m_lightXSpin->blockSignals(true);
+    m_lightYSpin->blockSignals(true);
+    m_lightZSpin->blockSignals(true);
+    m_lightRadiusSpin->blockSignals(true);
+    m_lightRSpin->blockSignals(true);
+    m_lightGSpin->blockSignals(true);
+    m_lightBSpin->blockSignals(true);
+    m_lightIntensitySpin->blockSignals(true);
+    m_lightFalloffSpin->blockSignals(true);
+
+    m_lightXSpin->setValue(light.x);
+    m_lightYSpin->setValue(light.y);
+    m_lightZSpin->setValue(light.z);
+    m_lightRadiusSpin->setValue(light.radius);
+    m_lightRSpin->setValue(light.color_r);
+    m_lightGSpin->setValue(light.color_g);
+    m_lightBSpin->setValue(light.color_b);
+    m_lightIntensitySpin->setValue(light.intensity);
+    m_lightFalloffSpin->setValue(light.falloff);
+
+    // Update color button swatch
+    QColor color(light.color_r, light.color_g, light.color_b);
+    m_lightColorButton->setStyleSheet(
+        QString("background-color: %1;").arg(color.name()));
+
+    m_lightXSpin->blockSignals(false);
+    m_lightYSpin->blockSignals(false);
+    m_lightZSpin->blockSignals(false);
+    m_lightRadiusSpin->blockSignals(false);
+    m_lightRSpin->blockSignals(false);
+    m_lightGSpin->blockSignals(false);
+    m_lightBSpin->blockSignals(false);
+    m_lightIntensitySpin->blockSignals(false);
+    m_lightFalloffSpin->blockSignals(false);
+  } else {
+    m_lightIdLabel->setText(tr("Ninguna luz seleccionada"));
+  }
+}
+
+void MainWindow::onSelectLightColor() {
+  QColor color(m_lightRSpin->value(), m_lightGSpin->value(),
+               m_lightBSpin->value());
+  QColor selected = QColorDialog::getColor(color, this, tr("Color de Luz"));
+  if (selected.isValid()) {
+    m_lightRSpin->setValue(selected.red());
+    m_lightGSpin->setValue(selected.green());
+    m_lightBSpin->setValue(selected.blue());
+    onLightChanged();
+  }
+}
+
+void MainWindow::onDeleteLight() {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || !editor->mapData())
+    return;
+
+  if (m_selectedLightIndex < 0 ||
+      m_selectedLightIndex >= editor->mapData()->lights.size())
+    return;
+
+  if (QMessageBox::question(this, tr("Eliminar Luz"),
+                            tr("¿Deseas eliminar la luz seleccionada?")) ==
+      QMessageBox::Yes) {
+    editor->mapData()->lights.removeAt(m_selectedLightIndex);
+    m_selectedLightIndex = -1;
+    updateLightPanel();
+    editor->update();
+    updateVisualMode();
+  }
+}
+// --- NORMAL MAP SLOTS ---
+
+void MainWindow::onSectorFloorNormalChanged(int val) {
+  GridEditor *editor = getCurrentEditor();
+  if (editor && m_selectedSectorId != -1) {
+    for (Sector &sector : editor->mapData()->sectors) {
+      if (sector.sector_id == m_selectedSectorId) {
+        sector.floor_normal_id = val;
+        editor->update();
+        updateVisualMode();
+        break;
+      }
+    }
+  }
+}
+
+void MainWindow::onSectorCeilingNormalChanged(int val) {
+  GridEditor *editor = getCurrentEditor();
+  if (editor && m_selectedSectorId != -1) {
+    for (Sector &sector : editor->mapData()->sectors) {
+      if (sector.sector_id == m_selectedSectorId) {
+        sector.ceiling_normal_id = val;
+        editor->update();
+        updateVisualMode();
+        break;
+      }
+    }
+  }
+}
+
+void MainWindow::onSelectSectorFloorNormal() {
+  TextureSelector selector(m_textureCache, this);
+  if (selector.exec() == QDialog::Accepted) {
+    m_sectorFloorNormalSpin->setValue(selector.selectedTextureId());
+  }
+}
+
+void MainWindow::onSelectSectorCeilingNormal() {
+  TextureSelector selector(m_textureCache, this);
+  if (selector.exec() == QDialog::Accepted) {
+    m_sectorCeilingNormalSpin->setValue(selector.selectedTextureId());
+  }
+}
+
+void MainWindow::onWallNormalLowerChanged(int val) {
+  GridEditor *editor = getCurrentEditor();
+  if (editor && editor->mapData() && m_selectedSectorId >= 0 &&
+      m_selectedSectorId < editor->mapData()->sectors.size() &&
+      m_selectedWallId >= 0 &&
+      m_selectedWallId <
+          editor->mapData()->sectors[m_selectedSectorId].walls.size()) {
+    editor->mapData()
+        ->sectors[m_selectedSectorId]
+        .walls[m_selectedWallId]
+        .texture_id_lower_normal = val;
+    editor->update();
+    updateVisualMode();
+  }
+}
+
+void MainWindow::onWallNormalMiddleChanged(int val) {
+  GridEditor *editor = getCurrentEditor();
+  if (editor && editor->mapData() && m_selectedSectorId >= 0 &&
+      m_selectedSectorId < editor->mapData()->sectors.size() &&
+      m_selectedWallId >= 0 &&
+      m_selectedWallId <
+          editor->mapData()->sectors[m_selectedSectorId].walls.size()) {
+    editor->mapData()
+        ->sectors[m_selectedSectorId]
+        .walls[m_selectedWallId]
+        .texture_id_middle_normal = val;
+    editor->update();
+    updateVisualMode();
+  }
+}
+
+void MainWindow::onWallNormalUpperChanged(int val) {
+  GridEditor *editor = getCurrentEditor();
+  if (editor && editor->mapData() && m_selectedSectorId >= 0 &&
+      m_selectedSectorId < editor->mapData()->sectors.size() &&
+      m_selectedWallId >= 0 &&
+      m_selectedWallId <
+          editor->mapData()->sectors[m_selectedSectorId].walls.size()) {
+    editor->mapData()
+        ->sectors[m_selectedSectorId]
+        .walls[m_selectedWallId]
+        .texture_id_upper_normal = val;
+    editor->update();
+    updateVisualMode();
+  }
+}
+
+void MainWindow::onSelectWallNormalLower() {
+  TextureSelector selector(m_textureCache, this);
+  if (selector.exec() == QDialog::Accepted) {
+    m_wallNormalLowerSpin->setValue(selector.selectedTextureId());
+  }
+}
+
+void MainWindow::onSelectWallNormalMiddle() {
+  TextureSelector selector(m_textureCache, this);
+  if (selector.exec() == QDialog::Accepted) {
+    m_wallNormalMiddleSpin->setValue(selector.selectedTextureId());
+  }
+}
+
+void MainWindow::onSelectWallNormalUpper() {
+  TextureSelector selector(m_textureCache, this);
+  if (selector.exec() == QDialog::Accepted) {
+    m_wallNormalUpperSpin->setValue(selector.selectedTextureId());
   }
 }

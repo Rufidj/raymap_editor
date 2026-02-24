@@ -128,6 +128,10 @@ struct Sector {
   /* Portales (IDs) */
   QVector<int> portal_ids;
 
+  int flags; /* Sector flags (Liquid, etc.) */
+  float liquid_intensity;
+  float liquid_speed;
+
   int group_id; // NEW: ID of the group this sector belongs to (-1 if ungrouped)
 
   /* Jerarquía de sectores anidados */
@@ -142,7 +146,8 @@ struct Sector {
   Sector()
       : sector_id(0), floor_z(0.0f), ceiling_z(256.0f), floor_texture_id(0),
         ceiling_texture_id(0), floor_normal_id(0), ceiling_normal_id(0),
-        light_level(255), group_id(-1), parent_sector_id(-1) {}
+        light_level(128), flags(0), liquid_intensity(1.0f), liquid_speed(1.0f),
+        group_id(-1), parent_sector_id(-1) {}
 };
 
 /* ============================================================================

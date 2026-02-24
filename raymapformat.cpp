@@ -59,8 +59,8 @@ bool RayMapFormat::loadMap(
   }
 
   /* Verify version */
-  if (version < 8 || version > 15) {
-    qWarning() << "Versión no soportada:" << version << "(solo v8-v15)";
+  if (version < 8 || version > 26) {
+    qWarning() << "Versión no soportada:" << version << "(solo v8-v26)";
     file.close();
     return false;
   }
@@ -94,9 +94,44 @@ bool RayMapFormat::loadMap(
                    sizeof(int));
     in.readRawData(reinterpret_cast<char *>(&sector.light_level), sizeof(int));
 
+    if (version >= 24) {
+      in.readRawData(reinterpret_cast<char *>(&sector.floor_normal_id),
+                     sizeof(int));
+      in.readRawData(reinterpret_cast<char *>(&sector.ceiling_normal_id),
+                     sizeof(int));
+    } else {
+      sector.floor_normal_id = 0;
+      sector.ceiling_normal_id = 0;
+    }
+
+    if (version >= 22) {
+      in.readRawData(reinterpret_cast<char *>(&sector.flags), sizeof(int));
+    } else {
+      sector.flags = 0;
+    }
+
+    if (version >= 26) {
+      in.readRawData(reinterpret_cast<char *>(&sector.liquid_intensity),
+                     sizeof(float));
+    } else {
+      sector.liquid_intensity = 1.0f;
+    }
+    if (version >= 27) {
+      in.readRawData(reinterpret_cast<char *>(&sector.liquid_speed),
+                     sizeof(float));
+    } else {
+      sector.liquid_speed = 1.0f;
+    }
+
     /* Read vertices */
     uint32_t num_vertices;
     in.readRawData(reinterpret_cast<char *>(&num_vertices), sizeof(uint32_t));
+
+    if (num_vertices > 10000) { // Safety check to prevent hang
+      qWarning() << "Error: Too many vertices in sector" << i << ":"
+                 << num_vertices;
+      return false;
+    }
 
     for (uint32_t v = 0; v < num_vertices; v++) {
       float x, y;
@@ -108,6 +143,11 @@ bool RayMapFormat::loadMap(
     /* Read walls */
     uint32_t num_walls;
     in.readRawData(reinterpret_cast<char *>(&num_walls), sizeof(uint32_t));
+
+    if (num_walls > 10000) { // Safety check to prevent hang
+      qWarning() << "Error: Too many walls in sector" << i << ":" << num_walls;
+      return false;
+    }
 
     for (uint32_t w = 0; w < num_walls; w++) {
       Wall wall;
@@ -129,6 +169,19 @@ bool RayMapFormat::loadMap(
                      sizeof(float));
       in.readRawData(reinterpret_cast<char *>(&wall.portal_id), sizeof(int));
       in.readRawData(reinterpret_cast<char *>(&wall.flags), sizeof(int));
+
+      if (version >= 24) {
+        in.readRawData(reinterpret_cast<char *>(&wall.texture_id_lower_normal),
+                       sizeof(int));
+        in.readRawData(reinterpret_cast<char *>(&wall.texture_id_middle_normal),
+                       sizeof(int));
+        in.readRawData(reinterpret_cast<char *>(&wall.texture_id_upper_normal),
+                       sizeof(int));
+      } else {
+        wall.texture_id_lower_normal = 0;
+        wall.texture_id_middle_normal = 0;
+        wall.texture_id_upper_normal = 0;
+      }
 
       sector.walls.append(wall);
     }
@@ -437,6 +490,53 @@ bool RayMapFormat::loadMap(
     }
   }
 
+  // ===== LIGHTS (v25) =====
+  if (version >= 25) {
+    // Lights are at the end of the file
+    // Strategy: seek num_lights based on file size and fixed struct size (36)
+    qint64 savedPos = file.pos();
+    qint64 fileSize = file.size();
+
+    bool foundLights = false;
+    for (int n = 0; n <= 32; ++n) {
+      qint64 candidate = fileSize - 4 - (qint64)n * 36;
+      if (candidate < savedPos)
+        break;
+
+      file.seek(candidate);
+      uint32_t numL;
+      in.readRawData(reinterpret_cast<char *>(&numL), sizeof(uint32_t));
+      if (numL == (uint32_t)n) {
+        mapData.lights.clear();
+        for (uint32_t l = 0; l < numL; ++l) {
+          struct {
+            int32_t id;
+            float x, y, z;
+            int32_t r, g, b;
+            float intensity, falloff;
+          } tempL;
+          in.readRawData(reinterpret_cast<char *>(&tempL), sizeof(tempL));
+
+          Light light;
+          light.id = tempL.id;
+          light.x = tempL.x;
+          light.y = tempL.y;
+          light.z = tempL.z;
+          light.color_r = tempL.r;
+          light.color_g = tempL.g;
+          light.color_b = tempL.b;
+          light.intensity = tempL.intensity;
+          light.falloff = tempL.falloff;
+          mapData.lights.append(light);
+        }
+        foundLights = true;
+        break;
+      }
+    }
+    if (!foundLights)
+      file.seek(savedPos);
+  }
+
   file.close();
 
   qDebug() << "Mapa cargado:" << mapData.sectors.size() << "sectores,"
@@ -479,7 +579,8 @@ bool RayMapFormat::saveMap(
   }
   // --------------------------------------------
 
-  uint32_t version = 15; // Updated to v15 for Snap to Floor field
+  const uint32_t version = 27; /* Updated for liquid_speed */
+                               // v24: Normals, v25: Lights, v26: Fluid Params
   uint32_t num_sectors = mapData.sectors.size();
   uint32_t num_portals = mapData.portals.size();
   uint32_t num_sprites = mapData.sprites.size();
@@ -544,6 +645,20 @@ bool RayMapFormat::saveMap(
     out.writeRawData(reinterpret_cast<const char *>(&sector.light_level),
                      sizeof(int));
 
+    /* v24+: Normal maps */
+    out.writeRawData(reinterpret_cast<const char *>(&sector.floor_normal_id),
+                     sizeof(int));
+    out.writeRawData(reinterpret_cast<const char *>(&sector.ceiling_normal_id),
+                     sizeof(int));
+
+    // v22+: Sector flags (Fluid types, etc.)
+    out.writeRawData(reinterpret_cast<const char *>(&sector.flags),
+                     sizeof(int));
+    out.writeRawData(reinterpret_cast<const char *>(&sector.liquid_intensity),
+                     sizeof(float));
+    out.writeRawData(reinterpret_cast<const char *>(&sector.liquid_speed),
+                     sizeof(float));
+
     /* Write vertices */
     uint32_t num_vertices = sector.vertices.size();
     out.writeRawData(reinterpret_cast<const char *>(&num_vertices),
@@ -594,6 +709,17 @@ bool RayMapFormat::saveMap(
 
       out.writeRawData(reinterpret_cast<const char *>(&wall.flags),
                        sizeof(int));
+
+      /* v24+: Normal maps */
+      out.writeRawData(
+          reinterpret_cast<const char *>(&wall.texture_id_lower_normal),
+          sizeof(int));
+      out.writeRawData(
+          reinterpret_cast<const char *>(&wall.texture_id_middle_normal),
+          sizeof(int));
+      out.writeRawData(
+          reinterpret_cast<const char *>(&wall.texture_id_upper_normal),
+          sizeof(int));
     }
 
     // Save hierarchy (parent and children) - WITH REMAPPING
@@ -821,6 +947,33 @@ bool RayMapFormat::saveMap(
       out.writeRawData(reinterpret_cast<const char *>(&wp.look_angle),
                        sizeof(float));
     }
+  }
+
+  // ===== LIGHTS (v25) =====
+  uint32_t numLights = (uint32_t)qMin(mapData.lights.size(), 32);
+  out.writeRawData(reinterpret_cast<const char *>(&numLights),
+                   sizeof(uint32_t));
+
+  for (uint32_t i = 0; i < numLights; ++i) {
+    const Light &light = mapData.lights[i];
+    struct {
+      int32_t id;
+      float x, y, z;
+      int32_t r, g, b;
+      float intensity, falloff;
+    } tempL;
+
+    tempL.id = light.id;
+    tempL.x = light.x;
+    tempL.y = light.y;
+    tempL.z = light.z;
+    tempL.r = (int32_t)light.color_r;
+    tempL.g = (int32_t)light.color_g;
+    tempL.b = (int32_t)light.color_b;
+    tempL.intensity = light.intensity;
+    tempL.falloff = light.falloff;
+
+    out.writeRawData(reinterpret_cast<const char *>(&tempL), sizeof(tempL));
   }
 
   /* Flush */

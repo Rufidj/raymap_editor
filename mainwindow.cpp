@@ -780,6 +780,8 @@ void MainWindow::createDockWindows() {
 
   sectorLayout->addWidget(sectorNormalGroup);
 
+  sectorLayout->addWidget(sectorNormalGroup);
+
   sectorLayout->addStretch();
   m_propertiesTabs->addTab(m_sectorPanel, tr("Sector"));
 
@@ -935,7 +937,7 @@ void MainWindow::createDockWindows() {
   colorRowLayout->addWidget(m_lightColorButton);
 
   m_lightIntensitySpin = new QDoubleSpinBox();
-  m_lightIntensitySpin->setRange(0, 10);
+  m_lightIntensitySpin->setRange(0, 1000000);
   m_lightIntensitySpin->setSingleStep(0.1);
   m_lightFalloffSpin = new QDoubleSpinBox();
   m_lightFalloffSpin->setRange(1, 2);
@@ -974,6 +976,95 @@ void MainWindow::createDockWindows() {
 
   lightLayout->addStretch();
   m_propertiesTabs->addTab(m_lightPanel, tr("Luz"));
+
+  // --- 5. LIQUID TAB ---
+  m_liquidPanel = new QWidget();
+  QVBoxLayout *liquidLayout = new QVBoxLayout(m_liquidPanel);
+
+  QGroupBox *fluidGroup = new QGroupBox(tr("Tipo de Fluido"));
+  QVBoxLayout *fluidLayout = new QVBoxLayout(fluidGroup);
+
+  m_sectorFluidTypeCombo = new QComboBox();
+  m_sectorFluidTypeCombo->addItem(tr("Ninguno"), 0);
+  m_sectorFluidTypeCombo->addItem(tr("Agua"), 1);
+  m_sectorFluidTypeCombo->addItem(tr("Lava"), 2);
+  m_sectorFluidTypeCombo->addItem(tr("Ácido"), 4);
+  connect(m_sectorFluidTypeCombo,
+          QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          &MainWindow::onSectorFluidChanged);
+  fluidLayout->addWidget(m_sectorFluidTypeCombo);
+  liquidLayout->addWidget(fluidGroup);
+
+  QGroupBox *applyToGroup = new QGroupBox(tr("Aplicar a:"));
+  QVBoxLayout *applyToLayout = new QVBoxLayout(applyToGroup);
+
+  m_sectorLiquidFloorCheck = new QCheckBox(tr("Suelo"));
+  connect(m_sectorLiquidFloorCheck, &QCheckBox::toggled, this,
+          &MainWindow::onSectorLiquidFloorChanged);
+  applyToLayout->addWidget(m_sectorLiquidFloorCheck);
+
+  m_sectorLiquidCeilingCheck = new QCheckBox(tr("Techo"));
+  connect(m_sectorLiquidCeilingCheck, &QCheckBox::toggled, this,
+          &MainWindow::onSectorLiquidCeilingChanged);
+  applyToLayout->addWidget(m_sectorLiquidCeilingCheck);
+
+  m_sectorLiquidWallsCheck = new QCheckBox(tr("Paredes"));
+  connect(m_sectorLiquidWallsCheck, &QCheckBox::toggled, this,
+          &MainWindow::onSectorLiquidWallsChanged);
+  applyToLayout->addWidget(m_sectorLiquidWallsCheck);
+
+  liquidLayout->addWidget(applyToGroup);
+
+  QGroupBox *scrollGroup = new QGroupBox(tr("Desplazamiento UV"));
+  QVBoxLayout *scrollLayout = new QVBoxLayout(scrollGroup);
+
+  m_sectorScrollXCheck = new QCheckBox(tr("Scroll X"));
+  connect(m_sectorScrollXCheck, &QCheckBox::toggled, this,
+          &MainWindow::onSectorScrollXChanged);
+  scrollLayout->addWidget(m_sectorScrollXCheck);
+
+  m_sectorScrollYCheck = new QCheckBox(tr("Scroll Y"));
+  connect(m_sectorScrollYCheck, &QCheckBox::toggled, this,
+          &MainWindow::onSectorScrollYChanged);
+  scrollLayout->addWidget(m_sectorScrollYCheck);
+
+  liquidLayout->addWidget(scrollGroup);
+
+  QGroupBox *deformGroup = new QGroupBox(tr("Deformación"));
+  QVBoxLayout *deformLayout = new QVBoxLayout(deformGroup);
+
+  QHBoxLayout *intensityLayout = new QHBoxLayout();
+  intensityLayout->addWidget(new QLabel(tr("Intensidad:")));
+  m_sectorLiquidIntensitySpin = new QDoubleSpinBox();
+  m_sectorLiquidIntensitySpin->setRange(0.0, 10.0);
+  m_sectorLiquidIntensitySpin->setSingleStep(0.1);
+  m_sectorLiquidIntensitySpin->setValue(1.0);
+  connect(m_sectorLiquidIntensitySpin,
+          QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+          &MainWindow::onSectorLiquidIntensityChanged);
+  intensityLayout->addWidget(m_sectorLiquidIntensitySpin);
+  deformLayout->addLayout(intensityLayout);
+
+  QHBoxLayout *speedLayout = new QHBoxLayout();
+  speedLayout->addWidget(new QLabel(tr("Ritmo:")));
+  m_sectorLiquidSpeedSpin = new QDoubleSpinBox();
+  m_sectorLiquidSpeedSpin->setRange(0.0, 10.0);
+  m_sectorLiquidSpeedSpin->setSingleStep(0.1);
+  m_sectorLiquidSpeedSpin->setValue(1.0);
+  connect(m_sectorLiquidSpeedSpin,
+          QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+          &MainWindow::onSectorLiquidSpeedChanged);
+  speedLayout->addWidget(m_sectorLiquidSpeedSpin);
+  deformLayout->addLayout(speedLayout);
+
+  m_sectorLiquidRipplesCheck = new QCheckBox(tr("Ondulaciones"));
+  connect(m_sectorLiquidRipplesCheck, &QCheckBox::toggled, this,
+          &MainWindow::onSectorLiquidRipplesChanged);
+  deformLayout->addWidget(m_sectorLiquidRipplesCheck);
+
+  liquidLayout->addWidget(deformGroup);
+  liquidLayout->addStretch();
+  m_propertiesTabs->addTab(m_liquidPanel, tr("Fluidos"));
 
   // Other docks
   m_sceneEntitiesDock = new QDockWidget(tr("Entidades de Escena"), this);
@@ -1599,6 +1690,167 @@ void MainWindow::onSectorCeilingTextureChanged(int value) {
         updateVisualMode();
         break;
       }
+    }
+  }
+}
+
+void MainWindow::onSectorFluidChanged(int index) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      int fluidFlag = m_sectorFluidTypeCombo->itemData(index).toInt();
+      // Clear fluid bits (1, 2, 4)
+      sector.flags &= ~7;
+      // Set new fluid bit
+      sector.flags |= fluidFlag;
+
+      // UX: If a fluid is selected but no surface reaction is enabled, enable
+      // them all by default, plus some scrolling
+      if (fluidFlag != 0 && !(sector.flags & (32 | 64 | 128))) {
+        sector.flags |=
+            (32 | 64 | 128 | 8 | 256); // Floor, Ceiling, Walls, Scroll, Ripples
+        if (sector.liquid_intensity < 0.001f) {
+          sector.liquid_intensity = 1.0f;
+        }
+      }
+
+      updateSectorPanel(); // Refresh checkboxes
+      editor->update();
+      updateVisualMode();
+      break;
+    }
+  }
+}
+
+void MainWindow::onSectorScrollXChanged(bool checked) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      if (checked)
+        sector.flags |= 8;
+      else
+        sector.flags &= ~8;
+      editor->update();
+      updateVisualMode();
+      break;
+    }
+  }
+}
+
+void MainWindow::onSectorScrollYChanged(bool checked) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      if (checked)
+        sector.flags |= 16;
+      else
+        sector.flags &= ~16;
+      editor->update();
+      updateVisualMode();
+      break;
+    }
+  }
+}
+
+void MainWindow::onSectorLiquidFloorChanged(bool checked) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      if (checked)
+        sector.flags |= 32;
+      else
+        sector.flags &= ~32;
+      editor->update();
+      updateVisualMode();
+      break;
+    }
+  }
+}
+
+void MainWindow::onSectorLiquidCeilingChanged(bool checked) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      if (checked)
+        sector.flags |= 64;
+      else
+        sector.flags &= ~64;
+      editor->update();
+      updateVisualMode();
+      break;
+    }
+  }
+}
+
+void MainWindow::onSectorLiquidWallsChanged(bool checked) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      if (checked)
+        sector.flags |= 128;
+      else
+        sector.flags &= ~128;
+      editor->update();
+      updateVisualMode();
+      break;
+    }
+  }
+}
+
+void MainWindow::onSectorLiquidRipplesChanged(bool checked) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      if (checked)
+        sector.flags |= 256; /* RAY_SECTOR_FLAG_RIPPLES */
+      else
+        sector.flags &= ~256;
+      editor->update();
+      updateVisualMode();
+      break;
+    }
+  }
+}
+
+void MainWindow::onSectorLiquidIntensityChanged(double value) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      sector.liquid_intensity = (float)value;
+      updateVisualMode();
+      break;
+    }
+  }
+}
+
+void MainWindow::onSectorLiquidSpeedChanged(double value) {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      sector.liquid_speed = (float)value;
+      updateVisualMode();
+      break;
     }
   }
 }
@@ -2277,6 +2529,44 @@ void MainWindow::updateSectorPanel() {
     m_sectorCeilingTextureSpin->setValue(sector.ceiling_texture_id);
     m_sectorFloorNormalSpin->setValue(sector.floor_normal_id);
     m_sectorCeilingNormalSpin->setValue(sector.ceiling_normal_id);
+
+    m_sectorFluidTypeCombo->blockSignals(true);
+    m_sectorScrollXCheck->blockSignals(true);
+    m_sectorScrollYCheck->blockSignals(true);
+    m_sectorLiquidFloorCheck->blockSignals(true);
+    m_sectorLiquidCeilingCheck->blockSignals(true);
+    m_sectorLiquidWallsCheck->blockSignals(true);
+    m_sectorLiquidIntensitySpin->blockSignals(true);
+
+    if (sector.flags & 1)
+      m_sectorFluidTypeCombo->setCurrentIndex(1);
+    else if (sector.flags & 2)
+      m_sectorFluidTypeCombo->setCurrentIndex(2);
+    else if (sector.flags & 4)
+      m_sectorFluidTypeCombo->setCurrentIndex(3);
+    else
+      m_sectorFluidTypeCombo->setCurrentIndex(0);
+
+    m_sectorScrollXCheck->setChecked(sector.flags & 8);
+    m_sectorScrollYCheck->setChecked(sector.flags & 16);
+    m_sectorLiquidFloorCheck->setChecked(sector.flags & 32);
+    m_sectorLiquidCeilingCheck->setChecked(sector.flags & 64);
+    m_sectorLiquidWallsCheck->setChecked(sector.flags & 128);
+    m_sectorLiquidRipplesCheck->blockSignals(true);
+    m_sectorLiquidRipplesCheck->setChecked(sector.flags & 256);
+    m_sectorLiquidRipplesCheck->blockSignals(false);
+    m_sectorLiquidIntensitySpin->setValue(sector.liquid_intensity);
+    m_sectorLiquidSpeedSpin->blockSignals(true);
+    m_sectorLiquidSpeedSpin->setValue(sector.liquid_speed);
+    m_sectorLiquidSpeedSpin->blockSignals(false);
+
+    m_sectorFluidTypeCombo->blockSignals(false);
+    m_sectorScrollXCheck->blockSignals(false);
+    m_sectorScrollYCheck->blockSignals(false);
+    m_sectorLiquidFloorCheck->blockSignals(false);
+    m_sectorLiquidCeilingCheck->blockSignals(false);
+    m_sectorLiquidWallsCheck->blockSignals(false);
+    m_sectorLiquidIntensitySpin->blockSignals(false);
 
     m_sectorFloorZSpin->blockSignals(false);
     m_sectorCeilingZSpin->blockSignals(false);

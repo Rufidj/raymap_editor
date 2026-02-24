@@ -751,7 +751,15 @@ void GridEditor::mousePressEvent(QMouseEvent *event) {
     }
 
     case MODE_SELECT_WALL: {
-      // Check entities first
+      // Check lights first
+      int lightIdx = findLightAt(worldPos);
+      if (lightIdx >= 0) {
+        emit lightSelected(lightIdx, m_mapData->lights[lightIdx]);
+        update();
+        break;
+      }
+
+      // Check entities
       int entityIdx = findEntityAt(worldPos);
       if (entityIdx >= 0) {
         m_selectedEntity = entityIdx;
@@ -823,6 +831,14 @@ void GridEditor::mousePressEvent(QMouseEvent *event) {
       break;
 
     case MODE_SELECT_SECTOR: {
+      // Check lights first
+      int lightIdx = findLightAt(worldPos);
+      if (lightIdx >= 0) {
+        emit lightSelected(lightIdx, m_mapData->lights[lightIdx]);
+        update();
+        break;
+      }
+
       int sectorIdx = findSectorAt(worldPos);
       if (sectorIdx >= 0) {
         // Check if this sector belongs to a group
@@ -941,6 +957,21 @@ void GridEditor::mousePressEvent(QMouseEvent *event) {
       break;
     }
   } else if (event->button() == Qt::RightButton) {
+    // Right click selection as convenience
+    int lightIdx = findLightAt(worldPos);
+    if (lightIdx >= 0 && m_mapData) {
+      emit lightSelected(lightIdx, m_mapData->lights[lightIdx]);
+      update();
+      return;
+    }
+
+    int entityIdx = findEntityAt(worldPos);
+    if (entityIdx >= 0 && m_mapData) {
+      emit entitySelected(entityIdx, m_mapData->entities[entityIdx]);
+      update();
+      return;
+    }
+
     // Right click to finish polygon
     if (m_editMode == MODE_DRAW_SECTOR && m_currentPolygon.size() >= 3) {
       // Create new sector

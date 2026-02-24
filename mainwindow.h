@@ -70,9 +70,9 @@ private slots:
   void onFPGReloaded();
   void onOpenEffectGenerator();
   void onOpenCameraPathEditor();
-  void onManageNPCPaths();    // NEW: NPC Path Manager
-  void onOpenMeshGenerator(); // NEW: MD3 Generator
-  void onOpenFontEditor();    // NEW: Font Editor
+  void onManageNPCPaths();                         // NEW: NPC Path Manager
+  void onOpenMeshGenerator();                      // NEW: MD3 Generator
+  void onOpenFontEditor(const QString &path = ""); // NEW: Font Editor
 
   // Project Management
   void onNewProject();
@@ -132,6 +132,8 @@ private slots:
   void onTextureSelected(int textureId);
   void onCreateRectangle();
   void onCreateCircle();
+  void onPlaceLightMode();
+  void onInsertLight();
 
   // Insert Tools
   void onInsertBox();
@@ -159,7 +161,9 @@ private slots:
   void onEntitySelected(int index, EntityInstance entity); // NEW
   void onEntityChanged(int index, EntityInstance entity);  // NEW
   void onEditEntityBehavior(
-      int index, const EntityInstance &entity);   // NEW: Edit entity behavior
+      int index, const EntityInstance &entity); // NEW: Edit entity behavior
+  void onLightSelected(int index, Light light); // NEW
+  void onLightChanged(); // NEW: When light properties change
   void onSceneSelectionChanged(SceneEntity *ent); // NEW
 
   void updateSectorList();                         // Refresh the sector tree
@@ -196,6 +200,31 @@ private slots:
   void onDecalAlphaChanged(double value);
   void onDecalRenderOrderChanged(int value);
   void onDeleteDecal();
+  void onSelectLightColor();
+  void onDeleteLight();
+
+  // Normal Map Slots
+  void onSectorFloorNormalChanged(int val);
+  void onSectorCeilingNormalChanged(int val);
+  void onSelectSectorFloorNormal();
+  void onSelectSectorCeilingNormal();
+
+  void onSectorFluidChanged(int index);
+  void onSectorScrollXChanged(bool checked);
+  void onSectorScrollYChanged(bool checked);
+  void onSectorLiquidFloorChanged(bool checked);
+  void onSectorLiquidCeilingChanged(bool checked);
+  void onSectorLiquidWallsChanged(bool checked);
+  void onSectorLiquidRipplesChanged(bool checked);
+  void onSectorLiquidIntensityChanged(double value);
+  void onSectorLiquidSpeedChanged(double value);
+
+  void onWallNormalLowerChanged(int val);
+  void onWallNormalMiddleChanged(int val);
+  void onWallNormalUpperChanged(int val);
+  void onSelectWallNormalLower();
+  void onSelectWallNormalMiddle();
+  void onSelectWallNormalUpper();
 
   // Dark Mode
   void onToggleDarkMode(bool checked);
@@ -237,6 +266,8 @@ private:
   // Property panels
   QWidget *m_sectorPanel;
   QWidget *m_wallPanel;
+  QWidget *m_lightPanel;
+  QWidget *m_liquidPanel;
   EntityPropertyPanel *m_entityPanel; // NEW
 
   // Dock widgets
@@ -255,14 +286,42 @@ private:
   QDoubleSpinBox *m_sectorCeilingZSpin;
   QSpinBox *m_sectorFloorTextureSpin;
   QSpinBox *m_sectorCeilingTextureSpin;
+  QSpinBox *m_sectorFloorNormalSpin;
+  QSpinBox *m_sectorCeilingNormalSpin;
+  QComboBox *m_sectorFluidTypeCombo;
+  QCheckBox *m_sectorScrollXCheck;
+  QCheckBox *m_sectorScrollYCheck;
+  QCheckBox *m_sectorLiquidFloorCheck;
+  QCheckBox *m_sectorLiquidCeilingCheck;
+  QCheckBox *m_sectorLiquidWallsCheck;
+  QCheckBox *m_sectorLiquidRipplesCheck;
+  QDoubleSpinBox *m_sectorLiquidIntensitySpin;
+  QDoubleSpinBox *m_sectorLiquidSpeedSpin;
 
   // Wall controls
   QLabel *m_wallIdLabel;
   QSpinBox *m_wallTextureLowerSpin;
   QSpinBox *m_wallTextureMiddleSpin;
   QSpinBox *m_wallTextureUpperSpin;
+  QSpinBox *m_wallNormalLowerSpin;
+  QSpinBox *m_wallNormalMiddleSpin;
+  QSpinBox *m_wallNormalUpperSpin;
   QDoubleSpinBox *m_wallSplitLowerSpin;
   QDoubleSpinBox *m_wallSplitUpperSpin;
+
+  // Light controls
+  QLabel *m_lightIdLabel;
+  QDoubleSpinBox *m_lightXSpin;
+  QDoubleSpinBox *m_lightYSpin;
+  QDoubleSpinBox *m_lightZSpin;
+  QSpinBox *m_lightRSpin;
+  QSpinBox *m_lightGSpin;
+  QSpinBox *m_lightBSpin;
+  QDoubleSpinBox *m_lightRadiusSpin;
+  QDoubleSpinBox *m_lightIntensitySpin;
+  QDoubleSpinBox *m_lightFalloffSpin;
+  QPushButton *m_lightColorButton;
+  QPushButton *m_deleteLightButton;
 
   // Decal controls
   QDockWidget *m_decalDock;
@@ -294,6 +353,7 @@ private:
   int m_currentFPG;
   int m_selectedSectorId;
   int m_selectedWallId;
+  int m_selectedLightIndex;
   int m_selectedDecalId;
 
   // Slots for Skybox
@@ -353,6 +413,7 @@ private:
   QAction *m_insertDoorAction;     // Future
   QAction *m_insertElevatorAction; // Future
   QAction *m_insertStairsAction;   // Future
+  QAction *m_insertLightAction;    // NEW
 
   QAction *m_fontEditorAction;
 
@@ -373,6 +434,7 @@ private:
   QAction *m_placeSpawnModeAction;
   QAction *m_placeCameraModeAction;
   QAction *m_manualPortalModeAction;
+  QAction *m_placeLightModeAction; // NEW
   QActionGroup *m_modeGroup;
 
   // Toolbars
@@ -387,6 +449,7 @@ private:
   void updateWindowTitle();
   void updateSectorPanel();
   void updateWallPanel();
+  void updateLightPanel();
   void updateDecalPanel();
   void regenerateEntityScripts(const ProjectData *data = nullptr);
   void openProject(const QString &path);

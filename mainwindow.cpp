@@ -36,7 +36,9 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDialog>
+#include <QIntValidator>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMenu> // Added based on instruction
 #include <QMenuBar>
@@ -243,6 +245,14 @@ void MainWindow::createActions() {
   m_placeLightModeAction->setToolTip(tr("Colocar y seleccionar luces"));
   m_placeLightModeAction->setData(GridEditor::MODE_PLACE_LIGHT);
   m_modeGroup->addAction(m_placeLightModeAction);
+
+  m_multiSelectModeAction = new QAction(QIcon::fromTheme("edit-select"),
+                                        tr("Herramienta de Selección"), this);
+  m_multiSelectModeAction->setCheckable(true);
+  m_multiSelectModeAction->setToolTip(
+      tr("Selección múltiple, copiar y eliminar"));
+  m_multiSelectModeAction->setData(GridEditor::MODE_MULTI_SELECT);
+  m_modeGroup->addAction(m_multiSelectModeAction);
 
   m_drawSectorModeAction->setChecked(true);
 
@@ -540,6 +550,8 @@ void MainWindow::createToolbars() {
   m_modeToolbar->setObjectName("ModeToolbar");
   m_modeToolbar->setIconSize(QSize(24, 24));
   m_modeToolbar->addAction(m_drawSectorModeAction);
+  m_modeToolbar->addAction(m_multiSelectModeAction);
+  m_modeToolbar->addSeparator();
   m_modeToolbar->addAction(m_editVerticesModeAction);
   m_modeToolbar->addAction(m_selectWallModeAction);
   m_modeToolbar->addAction(m_selectSectorModeAction);
@@ -1065,6 +1077,66 @@ void MainWindow::createDockWindows() {
   liquidLayout->addWidget(deformGroup);
   liquidLayout->addStretch();
   m_propertiesTabs->addTab(m_liquidPanel, tr("Fluidos"));
+
+  // Fog Panel
+  m_fogPanel = new QWidget();
+  QVBoxLayout *fogLayout = new QVBoxLayout(m_fogPanel);
+
+  QGroupBox *fogGroup = new QGroupBox(tr("Niebla por Sector (GPU)"));
+  QVBoxLayout *fogGroupLayout = new QVBoxLayout(fogGroup);
+
+  // Color
+  QHBoxLayout *fogColorLayout = new QHBoxLayout();
+  fogColorLayout->addWidget(new QLabel(tr("Color:")));
+  m_sectorFogColorButton = new QPushButton();
+  m_sectorFogColorButton->setFixedWidth(60);
+  m_sectorFogColorButton->setStyleSheet("background-color: grey;");
+  connect(m_sectorFogColorButton, &QPushButton::clicked, this,
+          &MainWindow::onSectorFogColorClicked);
+  fogColorLayout->addWidget(m_sectorFogColorButton);
+  fogColorLayout->addStretch();
+  fogGroupLayout->addLayout(fogColorLayout);
+
+  // Density
+  QHBoxLayout *fogDensityLayout = new QHBoxLayout();
+  fogDensityLayout->addWidget(new QLabel(tr("Densidad:")));
+  m_sectorFogDensitySpin = new QDoubleSpinBox();
+  m_sectorFogDensitySpin->setRange(0.0, 100.0);
+  m_sectorFogDensitySpin->setSingleStep(1.0);
+  m_sectorFogDensitySpin->setDecimals(1);
+  connect(m_sectorFogDensitySpin,
+          QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+          &MainWindow::onSectorFogChanged);
+  fogDensityLayout->addWidget(m_sectorFogDensitySpin);
+  fogGroupLayout->addLayout(fogDensityLayout);
+
+  // Start
+  QHBoxLayout *fogStartLayout = new QHBoxLayout();
+  fogStartLayout->addWidget(new QLabel(tr("Inicio (Dist):")));
+  m_sectorFogStartSpin = new QDoubleSpinBox();
+  m_sectorFogStartSpin->setRange(0.0, 10000.0);
+  m_sectorFogStartSpin->setSingleStep(10.0);
+  connect(m_sectorFogStartSpin,
+          QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+          &MainWindow::onSectorFogChanged);
+  fogStartLayout->addWidget(m_sectorFogStartSpin);
+  fogGroupLayout->addLayout(fogStartLayout);
+
+  // End
+  QHBoxLayout *fogEndLayout = new QHBoxLayout();
+  fogEndLayout->addWidget(new QLabel(tr("Fin (Dist):")));
+  m_sectorFogEndSpin = new QDoubleSpinBox();
+  m_sectorFogEndSpin->setRange(1.0, 20000.0);
+  m_sectorFogEndSpin->setSingleStep(50.0);
+  connect(m_sectorFogEndSpin,
+          QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+          &MainWindow::onSectorFogChanged);
+  fogEndLayout->addWidget(m_sectorFogEndSpin);
+  fogGroupLayout->addLayout(fogEndLayout);
+
+  fogLayout->addWidget(fogGroup);
+  fogLayout->addStretch();
+  m_propertiesTabs->addTab(m_fogPanel, tr("Niebla"));
 
   // Other docks
   m_sceneEntitiesDock = new QDockWidget(tr("Entidades de Escena"), this);
@@ -1855,6 +1927,44 @@ void MainWindow::onSectorLiquidSpeedChanged(double value) {
   }
 }
 
+void MainWindow::onSectorFogChanged() {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      sector.fog_density = (float)m_sectorFogDensitySpin->value();
+      sector.fog_start = (float)m_sectorFogStartSpin->value();
+      sector.fog_end = (float)m_sectorFogEndSpin->value();
+      updateVisualMode();
+      break;
+    }
+  }
+}
+
+void MainWindow::onSectorFogColorClicked() {
+  GridEditor *editor = getCurrentEditor();
+  if (!editor || m_selectedSectorId == -1)
+    return;
+  for (Sector &sector : editor->mapData()->sectors) {
+    if (sector.sector_id == m_selectedSectorId) {
+      QColor initial(sector.fog_color_r * 255, sector.fog_color_g * 255,
+                     sector.fog_color_b * 255);
+      QColor color =
+          QColorDialog::getColor(initial, this, tr("Color de Niebla"));
+      if (color.isValid()) {
+        sector.fog_color_r = color.redF();
+        sector.fog_color_g = color.greenF();
+        sector.fog_color_b = color.blueF();
+        m_sectorFogColorButton->setStyleSheet(
+            QString("background-color: %1;").arg(color.name()));
+        updateVisualMode();
+      }
+      break;
+    }
+  }
+}
+
 void MainWindow::onSelectSectorFloorTexture() {
   GridEditor *editor = getCurrentEditor();
   if (!editor)
@@ -2568,6 +2678,24 @@ void MainWindow::updateSectorPanel() {
     m_sectorLiquidWallsCheck->blockSignals(false);
     m_sectorLiquidIntensitySpin->blockSignals(false);
 
+    // Fog sync
+    m_sectorFogDensitySpin->blockSignals(true);
+    m_sectorFogStartSpin->blockSignals(true);
+    m_sectorFogEndSpin->blockSignals(true);
+
+    m_sectorFogDensitySpin->setValue(sector.fog_density);
+    m_sectorFogStartSpin->setValue(sector.fog_start);
+    m_sectorFogEndSpin->setValue(sector.fog_end);
+
+    QColor fogBrush(sector.fog_color_r * 255, sector.fog_color_g * 255,
+                    sector.fog_color_b * 255);
+    m_sectorFogColorButton->setStyleSheet(
+        QString("background-color: %1;").arg(fogBrush.name()));
+
+    m_sectorFogDensitySpin->blockSignals(false);
+    m_sectorFogStartSpin->blockSignals(false);
+    m_sectorFogEndSpin->blockSignals(false);
+
     m_sectorFloorZSpin->blockSignals(false);
     m_sectorCeilingZSpin->blockSignals(false);
     m_sectorFloorTextureSpin->blockSignals(false);
@@ -3087,23 +3215,53 @@ void MainWindow::onCreateRectangle() {
     return;
   auto *map = editor->mapData();
 
-  // Ask for size
-  bool ok;
-  int size = QInputDialog::getInt(this, tr("Crear Rectángulo"),
-                                  tr("Tamaño del rectángulo (ancho y alto):"),
-                                  512, 64, 4096, 64, &ok);
-  if (!ok)
+  // Custom dialog for width and height (no digit limit)
+  QDialog dlg(this);
+  dlg.setWindowTitle(tr("Crear Rectángulo"));
+  QVBoxLayout *layout = new QVBoxLayout(&dlg);
+
+  QLabel *labelW = new QLabel(tr("Ancho:"), &dlg);
+  QLineEdit *editW = new QLineEdit("512", &dlg);
+  editW->setValidator(new QIntValidator(1, 999999999, &dlg));
+
+  QLabel *labelH = new QLabel(tr("Alto:"), &dlg);
+  QLineEdit *editH = new QLineEdit("512", &dlg);
+  editH->setValidator(new QIntValidator(1, 999999999, &dlg));
+
+  QDialogButtonBox *buttons = new QDialogButtonBox(
+      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dlg);
+  connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+  layout->addWidget(labelW);
+  layout->addWidget(editW);
+  layout->addWidget(labelH);
+  layout->addWidget(editH);
+  layout->addWidget(buttons);
+
+  editW->setFocus();
+  editW->selectAll();
+
+  if (dlg.exec() != QDialog::Accepted)
     return;
+
+  int width = editW->text().toInt();
+  int height = editH->text().toInt();
+  if (width <= 0)
+    width = 512;
+  if (height <= 0)
+    height = 512;
 
   // Create rectangle centered at origin
   Sector newSector;
   newSector.sector_id = map->getNextSectorId();
 
-  float half = size / 2.0f;
-  newSector.vertices.append(QPointF(-half, -half)); // Bottom-left
-  newSector.vertices.append(QPointF(half, -half));  // Bottom-right
-  newSector.vertices.append(QPointF(half, half));   // Top-right
-  newSector.vertices.append(QPointF(-half, half));  // Top-left
+  float halfW = width / 2.0f;
+  float halfH = height / 2.0f;
+  newSector.vertices.append(QPointF(-halfW, -halfH)); // Bottom-left
+  newSector.vertices.append(QPointF(halfW, -halfH));  // Bottom-right
+  newSector.vertices.append(QPointF(halfW, halfH));   // Top-right
+  newSector.vertices.append(QPointF(-halfW, halfH));  // Top-left
 
   newSector.floor_z = 0.0f;
   newSector.ceiling_z = 256.0f;
@@ -3132,8 +3290,9 @@ void MainWindow::onCreateRectangle() {
   editor->update();
   updateVisualMode();
 
-  m_statusLabel->setText(tr("Rectángulo %1x%1 creado (Sector %2)")
-                             .arg(size)
+  m_statusLabel->setText(tr("Rectángulo %1x%2 creado (Sector %3)")
+                             .arg(width)
+                             .arg(height)
                              .arg(newSector.sector_id));
 }
 

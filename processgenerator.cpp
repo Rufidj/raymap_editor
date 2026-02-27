@@ -80,7 +80,7 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
 
     out << "    // Create sprite with model\n";
     out << "    sprite_id = RAY_ADD_SPRITE(world_x, world_y, world_z, 0, 0, "
-           "0);\n";
+           "64, 64, 0);\n";
     out << "    if (sprite_id < 0)\n";
     out << "        say(\"[" << processName
         << "] ERROR: Failed to create sprite\");\n";
@@ -147,14 +147,14 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
     out << "end\n";
   } else if (type == "sprite") {
     out << "process " << processName
-        << "(double world_x, double world_y, double world_z)\n";
+        << "(float world_x, float world_y, float world_z)\n";
     out << "PRIVATE\n";
     out << "    int sprite_id;\n";
     out << "    int texture_id = 1;  // TODO: Get from FPG\n";
     out << "begin\n";
     out << "    // Create sprite\n";
-    out << "    sprite_id = RAY_ADD_SPRITE(world_x, world_y, world_z, "
-           "texture_id, 64, 64);\n";
+    out << "    sprite_id = RAY_ADD_SPRITE(world_x, world_y, world_z, 0, "
+           "texture_id, 64, 64, 0);\n";
     out << "    \n";
     out << "    loop\n";
     out << "        // Sprite logic here\n";
@@ -201,13 +201,15 @@ ProcessGenerator::generateSpawnCalls(const QVector<EntityInstance> &entities) {
     out << "    npc_paths_init();\n\n";
     out << "    // Spawn entities using data from flags\n";
     for (const EntityInstance &entity : entities) {
-      out << "    // Entity " << entity.processName << " at flag "
-          << entity.spawn_id << "\n";
-      out << "    " << entity.processName << "(";
+      QString uniqueName =
+          entity.processName + "_" + QString::number(entity.spawn_id);
+      out << "    // Entity " << uniqueName << " at flag " << entity.spawn_id
+          << "\n";
+      out << "    " << uniqueName << "(";
       out << "RAY_GET_FLAG_X(" << entity.spawn_id << "), ";
       out << "RAY_GET_FLAG_Y(" << entity.spawn_id << "), ";
       out << "RAY_GET_FLAG_Z(" << entity.spawn_id << "), ";
-      out << entity.cameraRotation << ");\n";
+      out << "(float)" << entity.cameraRotation << ");\n";
     }
     out << "\n";
   }
@@ -225,27 +227,35 @@ QString ProcessGenerator::generateAllProcessesCode(
   QString playerProcessName = ""; // Default empty
   for (const EntityInstance &entity : entities) {
     if (entity.isPlayer) {
-      playerProcessName = entity.processName;
+      playerProcessName =
+          entity.processName + "_" + QString::number(entity.spawn_id);
       out << "// DEBUG INFO: Found Player Entity -> Process Name: '"
           << playerProcessName << "' (Type: " << entity.type << ")\n";
       break;
     }
   }
 
-  // Get unique process names
-  QStringList uniqueProcesses = getUniqueProcessNames(entities);
+  // Generate one process per entity INSTANCE (not per unique name)
+  // Each instance gets a unique name: processName_spawnId
+  QSet<QString> generatedNames;
+  for (const EntityInstance &entity : entities) {
+    // Build unique process name for this instance
+    QString uniqueName =
+        entity.processName + "_" + QString::number(entity.spawn_id);
 
-  for (const QString &processName : uniqueProcesses) {
-    // Find first entity with this process name (case insensitive match)
-    for (const EntityInstance &entity : entities) {
-      if (entity.processName.toLower() == processName) {
-        QString procCode = generateProcessCodeWithBehavior(
-            entity, wrapperOpen, wrapperClose, playerProcessName);
+    // Skip if already generated (e.g. from hybrid map scan duplicates)
+    if (generatedNames.contains(uniqueName.toLower()))
+      continue;
+    generatedNames.insert(uniqueName.toLower());
 
-        out << procCode << "\n";
-        break;
-      }
-    }
+    // Create a copy with the unique process name
+    EntityInstance instanceCopy = entity;
+    instanceCopy.processName = uniqueName;
+
+    QString procCode = generateProcessCodeWithBehavior(
+        instanceCopy, wrapperOpen, wrapperClose, playerProcessName);
+
+    out << procCode << "\n";
   }
 
   return code;
@@ -298,12 +308,16 @@ QString ProcessGenerator::generateDeclarationsSection(
   QString declarations;
   QTextStream out(&declarations);
 
-  QStringList uniqueProcesses = getUniqueProcessNames(entities);
-  for (const QString &processName : uniqueProcesses) {
-    out << "DECLARE PROCESS " << processName
-        << "(double param_x, double param_y, double param_z, double "
-           "param_angle)\n";
-    out << "END\n";
+  // Generate one declaration per entity instance
+  QSet<QString> declaredNames;
+  for (const EntityInstance &entity : entities) {
+    QString uniqueName =
+        entity.processName + "_" + QString::number(entity.spawn_id);
+    if (!declaredNames.contains(uniqueName.toLower())) {
+      declaredNames.insert(uniqueName.toLower());
+      out << "DECLARE PROCESS " << uniqueName
+          << "(int param_x, int param_y, int param_z, int param_angle);\n";
+    }
   }
 
   return declarations;
@@ -315,6 +329,12 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
   QString code;
   QTextStream out(&code);
 
+  // Derive hook base name from asset file (e.g. "Car.md3" -> "car")
+  // so all instances of the same model share hook functions
+  QString hookBaseName = QFileInfo(entity.assetPath).baseName().toLower();
+  hookBaseName =
+      hookBaseName.replace(" ", "_").replace("-", "_").replace(".", "_");
+
   out << "// ========================================\n";
   out << "// Entity: " << entity.processName << "\n";
   out << "// Type: " << entity.type << "\n";
@@ -322,11 +342,10 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
   out << "// ========================================\n\n";
 
   out << "process " << entity.processName
-      << "(double param_x, double param_y, double param_z, double "
-         "param_angle)\n";
+      << "(int param_x, int param_y, int param_z, int param_angle)\n";
   out << "PRIVATE\n";
 
-  // Common variables
+  // Common variables - must be double for radians/subpixel precision
   out << "    double world_x; double world_y; double world_z; double "
          "world_angle;\n";
 
@@ -424,7 +443,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
   }
 
   out << "    // USER HOOK: Initialization\n";
-  out << "    hook_" << entity.processName.toLower() << "_init(id);\n\n";
+  out << "    hook_" << hookBaseName << "_init(id);\n\n";
 
   out << "    say(\"Spawned Entity: " << entity.processName
       << " at \" + world_x + \",\" + world_y);\n";
@@ -463,7 +482,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    \n";
     out << "    // Create sprite\n";
     out << "    sprite_id = RAY_ADD_SPRITE(world_x, world_y, world_z, 0, 0, "
-           "0);\n";
+           "64, 64, 0);\n";
     out << "    if (sprite_id < 0)\n";
     out << "        say(\"[" << entity.processName
         << "] ERROR: Failed to create sprite\");\n";
@@ -604,9 +623,9 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
         // Inverted controls based on user feedback (A = Clockwise?, D =
         // Counter-Clockwise?)
         out << "        if (key(_left) || key(_a)) player_angle -= rot_speed; "
-               "turn_offset -= 15.0; end\n";
+               "turn_offset -= 5.0; end\n";
         out << "        if (key(_right) || key(_d)) player_angle += rot_speed; "
-               "turn_offset += 15.0; end\n";
+               "turn_offset += 5.0; end\n";
 
         out << "        if (key(_w) || key(_up)) dx += cos(angle_milis_car) * "
                "move_speed; dy += sin(angle_milis_car) * move_speed; end\n";
@@ -658,7 +677,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     }
 
     if (entity.isPlayer || entity.controlType == EntityInstance::CONTROL_CAR) {
-      out << "        world_angle = player_angle + (turn_offset * 0.017453);\n";
+      out << "        world_angle = player_angle + (turn_offset * 0.005);\n";
     }
 
     if (entity.type == "campath") {
@@ -677,8 +696,13 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
       out << "        npc_follow_path(" << entity.npcPathId
           << ", &npc_current_waypoint, &npc_wait_counter, &npc_direction, "
              "&world_x, &world_y, &world_z, &world_angle);\n";
+      // NPC with path always snaps to floor to avoid sinking into terrain
+      out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y) + "
+             "5.0;\n";
     }
-    if (entity.snapToFloor) {
+    if (entity.snapToFloor &&
+        !(entity.npcPathId >= 0 && entity.autoStartPath)) {
+      // Manual snapToFloor (only if not already done by NPC path above)
       out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y) + "
              "5.0;\n";
     }
@@ -691,7 +715,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     }
 
     out << "        // USER HOOK: Update\n";
-    out << "        hook_" << entity.processName.toLower() << "_update(id);\n";
+    out << "        hook_" << hookBaseName << "_update(id);\n";
     out << "        frame;\n";
     out << "    end\n";
     break;
@@ -710,7 +734,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     }
     out << "        end\n";
     out << "        // USER HOOK: Update\n";
-    out << "        hook_" << entity.processName.toLower() << "_update(id);\n";
+    out << "        hook_" << hookBaseName << "_update(id);\n";
     out << "        frame;\n";
     out << "    end\n";
     break;
@@ -721,7 +745,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "        // TODO: Implement area trigger detection\n";
     out << "        // Check if player is within range\n";
     out << "        // USER HOOK: Update\n";
-    out << "        hook_" << entity.processName.toLower() << "_update(id);\n";
+    out << "        hook_" << hookBaseName << "_update(id);\n";
     out << "        frame;\n";
     out << "    end\n";
     break;

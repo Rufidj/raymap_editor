@@ -59,8 +59,8 @@ bool RayMapFormat::loadMap(
   }
 
   /* Verify version */
-  if (version < 8 || version > 26) {
-    qWarning() << "Versión no soportada:" << version << "(solo v8-v26)";
+  if (version < 8 || version > 28) {
+    qWarning() << "Versión no soportada:" << version << "(solo v8-v28)";
     file.close();
     return false;
   }
@@ -123,6 +123,28 @@ bool RayMapFormat::loadMap(
       sector.liquid_speed = 1.0f;
     }
 
+    /* v28+: Fog settings */
+    if (version >= 28) {
+      in.readRawData(reinterpret_cast<char *>(&sector.fog_color_r),
+                     sizeof(float));
+      in.readRawData(reinterpret_cast<char *>(&sector.fog_color_g),
+                     sizeof(float));
+      in.readRawData(reinterpret_cast<char *>(&sector.fog_color_b),
+                     sizeof(float));
+      in.readRawData(reinterpret_cast<char *>(&sector.fog_density),
+                     sizeof(float));
+      in.readRawData(reinterpret_cast<char *>(&sector.fog_start),
+                     sizeof(float));
+      in.readRawData(reinterpret_cast<char *>(&sector.fog_end), sizeof(float));
+    } else {
+      sector.fog_color_r = 0.5f;
+      sector.fog_color_g = 0.5f;
+      sector.fog_color_b = 0.5f;
+      sector.fog_density = 0.0f;
+      sector.fog_start = 100.0f;
+      sector.fog_end = 1000.0f;
+    }
+
     /* Read vertices */
     uint32_t num_vertices;
     in.readRawData(reinterpret_cast<char *>(&num_vertices), sizeof(uint32_t));
@@ -144,7 +166,7 @@ bool RayMapFormat::loadMap(
     uint32_t num_walls;
     in.readRawData(reinterpret_cast<char *>(&num_walls), sizeof(uint32_t));
 
-    if (num_walls > 10000) { // Safety check to prevent hang
+    if (num_walls > 32768) { // Increased safety check for large maps
       qWarning() << "Error: Too many walls in sector" << i << ":" << num_walls;
       return false;
     }
@@ -579,8 +601,9 @@ bool RayMapFormat::saveMap(
   }
   // --------------------------------------------
 
-  const uint32_t version = 27; /* Updated for liquid_speed */
-                               // v24: Normals, v25: Lights, v26: Fluid Params
+  const uint32_t version = 28; /* v28: Fog support */
+                               // v24: Normals, v25: Lights, v26: Fluid Params,
+                               // v27: Liquid Speed, v28: Fog
   uint32_t num_sectors = mapData.sectors.size();
   uint32_t num_portals = mapData.portals.size();
   uint32_t num_sprites = mapData.sprites.size();
@@ -657,6 +680,20 @@ bool RayMapFormat::saveMap(
     out.writeRawData(reinterpret_cast<const char *>(&sector.liquid_intensity),
                      sizeof(float));
     out.writeRawData(reinterpret_cast<const char *>(&sector.liquid_speed),
+                     sizeof(float));
+
+    // v28+: Fog settings
+    out.writeRawData(reinterpret_cast<const char *>(&sector.fog_color_r),
+                     sizeof(float));
+    out.writeRawData(reinterpret_cast<const char *>(&sector.fog_color_g),
+                     sizeof(float));
+    out.writeRawData(reinterpret_cast<const char *>(&sector.fog_color_b),
+                     sizeof(float));
+    out.writeRawData(reinterpret_cast<const char *>(&sector.fog_density),
+                     sizeof(float));
+    out.writeRawData(reinterpret_cast<const char *>(&sector.fog_start),
+                     sizeof(float));
+    out.writeRawData(reinterpret_cast<const char *>(&sector.fog_end),
                      sizeof(float));
 
     /* Write vertices */

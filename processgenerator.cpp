@@ -2,11 +2,14 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMap>
 #include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QTextStream>
 #include <QVector>
+#include <QtGlobal>
+#include <cmath>
 
 QString ProcessGenerator::generateProcessCode(const QString &processName,
                                               const QString &assetPath,
@@ -22,10 +25,10 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
 
   if (type == "model") {
     // Removed GLOBAL block to prevent compiler errors with multiple globals in
-    // includes Caching is disabled for file stability
+    // includes. Caching is disabled for file stability.
 
     out << "process " << processName << "(int spawn_id)\n";
-    out << "PRIVATE\n";
+    out << "private\n";
     out << "    int model_id;\n";
     out << "    int texture_id;\n";
     out << "    int sprite_id;\n";
@@ -88,12 +91,9 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
     out << "        return;\n";
     out << "    end\n";
     out << "    \n";
-    out << "    RAY_SET_SPRITE_MD2(sprite_id, model_id, texture_id);\n";
+    out << "    RAY_SET_SPRITE_MD3(sprite_id, model_id, texture_id);\n";
     out << "    RAY_SET_SPRITE_SCALE(sprite_id, scale);\n";
     out << "    RAY_SET_SPRITE_ANGLE(sprite_id, rotation);\n";
-    out << "    \n";
-    // out << "    say(\"[" << processName << "] Spawned successfully!
-    // sprite_id=\" + sprite_id);\n";
     out << "    \n";
     out << "    loop\n";
     out << "        // Entity logic here\n";
@@ -106,6 +106,7 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
     out << "    // Cleanup\n";
     out << "    RAY_CLEAR_FLAG();\n";
     out << "    RAY_REMOVE_SPRITE(sprite_id);\n";
+    out << "end\n";
   } else if (type == "campath" ||
              assetPath.endsWith(".campath", Qt::CaseInsensitive)) {
     // Camera Path Process wrapper using Native Engine Functions
@@ -114,7 +115,7 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
     QString cleanPath = "assets/paths/" + fi.fileName();
 
     out << "process " << processName << "(int spawn_id)\n";
-    out << "PRIVATE\n";
+    out << "private\n";
     out << "    string path_file = \"" << cleanPath << "\";\n";
     out << "    int path_id = -1;\n";
     out << "    int p_id;\n";
@@ -148,7 +149,7 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
   } else if (type == "sprite") {
     out << "process " << processName
         << "(float world_x, float world_y, float world_z)\n";
-    out << "PRIVATE\n";
+    out << "private\n";
     out << "    int sprite_id;\n";
     out << "    int texture_id = 1;  // TODO: Get from FPG\n";
     out << "begin\n";
@@ -343,9 +344,9 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
 
   out << "process " << entity.processName
       << "(int param_x, int param_y, int param_z, int param_angle)\n";
-  out << "PRIVATE\n";
+  out << "private\n";
 
-  // Common variables - must be double for radians/subpixel precision
+  // Common variables - double for radians/subpixel precision
   out << "    double world_x; double world_y; double world_z; double "
          "world_angle;\n";
 
@@ -355,11 +356,15 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    int sprite_id;\n";
     out << "    double rotation;\n";
     out << "    double scale;\n";
+    out << "    double anim_interpolation;\n";
+    out << "    int anim_current_frame;\n";
+    out << "    int anim_next_frame;\n";
   } else if (entity.type == "campath") {
     out << "    int campath_id;\n";
   }
 
-  // Behavior-specific variables
+  // Behavior-specific variables (always present for sound/engine actions)
+  out << "    int car_engine_id;\n";
   if (entity.activationType == EntityInstance::ACTIVATION_ON_COLLISION) {
     out << "    int collision_target;\n";
     out << "    int collision_detected;\n";
@@ -367,7 +372,6 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    int event_triggered;\n";
   }
 
-  // Player-specific variables
   // Player or Car behavior-specific variables
   if (entity.isPlayer || entity.controlType == EntityInstance::CONTROL_CAR) {
     out << "    double move_speed;\n";
@@ -376,6 +380,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    double turn_offset;\n";
     out << "    double dx, dy;\n";
     out << "    double angle_milis_car;\n";
+    out << "    double speed;\n";
   }
 
   if (entity.isPlayer) {
@@ -384,6 +389,9 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    double cx, cy, cz, s, c, angle_deg;\n";
     out << "    double cam_angle_off;\n";
     out << "    double move_angle;\n";
+    out << "    double cam_safe_x, cam_safe_y, cam_dx, cam_dy;\n";
+    out << "    double cam_test_x, cam_test_y;\n";
+    out << "    int cam_steps, cam_i;\n";
     out << "    double angle_milis;\n";
   }
 
@@ -395,13 +403,27 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    int npc_direction; // For ping-pong mode\n";
   }
 
+  // Utility variables for asset loading and behavior
+  out << "    string texture_path_base;\n";
+  out << "    string alt_path;\n";
+  out << "    int s_id;\n";
+  out << "    int cur_speed;\n";
+  out << "    int speed_vol;\n";
+
   out << "begin\n";
+  out << "    car_engine_id = 0;\n";
   if (entity.type == "model") {
     out << "    model_id = 0;\n";
     out << "    texture_id = 0;\n";
     out << "    sprite_id = -1;\n";
     out << "    rotation = 0.0;\n";
     out << "    scale = 1.0;\n";
+    out << "    anim_interpolation = 0.0;\n";
+    out << "    anim_current_frame = " << entity.startGraph << ";\n";
+    out << "    anim_next_frame = "
+        << (entity.endGraph > entity.startGraph ? entity.startGraph + 1
+                                                : entity.startGraph)
+        << ";\n";
   } else if (entity.type == "campath") {
     out << "    campath_id = 0;\n";
   }
@@ -448,8 +470,6 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
   out << "    say(\"Spawned Entity: " << entity.processName
       << " at \" + world_x + \",\" + world_y);\n";
 
-  // NOTE: world_x, world_y, world_z are now parameters
-
   // Load assets based on type
   if (entity.type == "model") {
     QString cleanPath = entity.assetPath;
@@ -467,15 +487,31 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
       texturePath += ".png";
     }
 
-    out << "    // Load Model and Texture\n";
+    out << "    // Load Model and Texture (Localized path for MD3)\n";
+    out << "    texture_path_base = \"" << texturePath.section('.', 0, -2)
+        << "\";\n";
     out << "    model_id = RAY_LOAD_MD3(" << wrapperOpen << "\"" << cleanPath
         << "\"" << wrapperClose << ");\n";
-    out << "    texture_id = map_load(" << wrapperOpen << "\"" << texturePath
-        << "\"" << wrapperClose << ");\n";
-    out << "    \n";
+
+    out << "    // Try PNG then JPG\n";
+    out << "    texture_id = map_load(texture_path_base + \".png\");\n";
+    out << "    if (texture_id <= 0) texture_id = map_load(texture_path_base + "
+           "\".jpg\"); end\n";
+
+    out << "    if (texture_id <= 0)\n";
+    out << "       // Try same directory as model\n";
+    out << "       alt_path = \"assets/md3/\" + \""
+        << QFileInfo(entity.assetPath).baseName() << "\";\n";
+    out << "       texture_id = map_load(alt_path + \".png\");\n";
+    out << "       if (texture_id <= 0) texture_id = map_load(alt_path + "
+           "\".jpg\"); end\n";
+    out << "    end\n";
+
+    out << "    if (model_id == 0) say(\"[" << entity.processName
+        << "] ERROR: Failed to load model: " << cleanPath << "\"); end\n";
+    out << "    if (texture_id == 0) say(\"[" << entity.processName
+        << "] WARNING: Failed to load texture: \" + texture_path_base); end\n";
     out << "    if (model_id == 0)\n";
-    out << "        say(\"[" << entity.processName
-        << "] ERROR: Failed to load model\");\n";
     out << "        // RAY_CLEAR_FLAG();\n";
     out << "        return;\n";
     out << "    end\n";
@@ -490,15 +526,72 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "        return;\n";
     out << "    end\n";
     out << "    \n";
-    out << "    RAY_SET_SPRITE_MD2(sprite_id, model_id, texture_id);\n";
+    out << "    RAY_SET_SPRITE_MD3(sprite_id, model_id, texture_id);\n";
     out << "    RAY_SET_SPRITE_SCALE(sprite_id, scale);\n";
     out << "    RAY_SET_SPRITE_ANGLE(sprite_id, param_angle);\n";
+    out << "    \n";
+
+    // Animation support
+    if (entity.startGraph != 0 || entity.endGraph != 0 ||
+        entity.animSpeed != 0) {
+      out << "    RAY_SET_SPRITE_ANIM(sprite_id, " << entity.startGraph << ", "
+          << entity.endGraph << ", 0.0);\n";
+    }
     out << "    \n";
 
     // Visibility
     if (!entity.isVisible) {
       out << "    // Entity is invisible\n";
       out << "    RAY_SET_SPRITE_FLAGS(sprite_id, SPRITE_INVISIBLE);\n";
+      out << "    \n";
+    }
+
+    // Physics Engine
+    if (entity.physicsEnabled) {
+      out << "    // Physics Engine Configuration\n";
+      out << "    RAY_PHYSICS_ENABLE(sprite_id, " << entity.physicsMass << ", "
+          << (entity.width / 2.0f) << ", " << entity.height << ");\n";
+
+      if (entity.physicsFriction != 0.5f) {
+        out << "    RAY_PHYSICS_SET_FRICTION(sprite_id, "
+            << entity.physicsFriction << ");\n";
+      }
+      if (entity.physicsRestitution != 0.3f) {
+        out << "    RAY_PHYSICS_SET_RESTITUTION(sprite_id, "
+            << entity.physicsRestitution << ");\n";
+      }
+      if (entity.physicsGravityScale != 1.0f) {
+        out << "    RAY_PHYSICS_SET_GRAVITY_SCALE(sprite_id, "
+            << entity.physicsGravityScale << ");\n";
+      }
+      if (entity.physicsLinearDamping != 0.05f ||
+          entity.physicsAngularDamping != 0.1f) {
+        out << "    RAY_PHYSICS_SET_DAMPING(sprite_id, "
+            << entity.physicsLinearDamping << ", "
+            << entity.physicsAngularDamping << ");\n";
+      }
+      if (entity.physicsIsStatic) {
+        out << "    RAY_PHYSICS_SET_STATIC(sprite_id, 1);\n";
+      }
+      if (entity.physicsIsKinematic) {
+        out << "    RAY_PHYSICS_SET_KINEMATIC(sprite_id, 1);\n";
+      }
+      if (entity.physicsIsTrigger) {
+        out << "    RAY_PHYSICS_SET_TRIGGER(sprite_id, 1);\n";
+      }
+      if (entity.physicsLockRotX || entity.physicsLockRotY ||
+          entity.physicsLockRotZ) {
+        out << "    RAY_PHYSICS_LOCK_ROTATION(sprite_id, "
+            << (entity.physicsLockRotX ? 1 : 0) << ", "
+            << (entity.physicsLockRotY ? 1 : 0) << ", "
+            << (entity.physicsLockRotZ ? 1 : 0) << ");\n";
+      }
+      if (entity.physicsCollisionLayer != 1 ||
+          entity.physicsCollisionMask != 0xFFFF) {
+        out << "    RAY_PHYSICS_SET_LAYER(sprite_id, "
+            << entity.physicsCollisionLayer << ", "
+            << entity.physicsCollisionMask << ");\n";
+      }
       out << "    \n";
     }
   } else if (entity.type == "campath") {
@@ -557,6 +650,22 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
   out << "    // ===== BEHAVIOR =====\n";
 
   QString actionCode = entity.customAction;
+
+  // Use Behavior Graph if it has nodes
+  if (!entity.behaviorGraph.nodes.isEmpty()) {
+    actionCode = generateGraphCode(entity.behaviorGraph, "event_start");
+  }
+
+  QString updateCode;
+  if (!entity.behaviorGraph.nodes.isEmpty()) {
+    updateCode = generateGraphCode(entity.behaviorGraph, "event_update");
+  }
+
+  QString collisionCode;
+  if (!entity.behaviorGraph.nodes.isEmpty()) {
+    collisionCode = generateGraphCode(entity.behaviorGraph, "event_collision");
+  }
+
   switch (entity.activationType) {
   case EntityInstance::ACTIVATION_ON_START:
     out << "    // Activate on start\n";
@@ -586,7 +695,6 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
         break;
 
       case EntityInstance::CONTROL_THIRD_PERSON:
-        // Updated to Tank-like forward motion (relative to player facing)
         out << "        angle_milis = player_angle * 57295.8;\n";
         out << "        dx = 0; dy = 0;\n";
 
@@ -602,8 +710,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
         out << "        if (key(_d)) dx += cos(angle_milis - 90000) * "
                "move_speed; dy += sin(angle_milis - 90000) * move_speed; end\n";
 
-        out << "        // Apply movement with collision (Sliding) using "
-               "object Z\n";
+        out << "        // Apply movement with collision (Sliding)\n";
         out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z, "
                "world_x + dx, world_y) == 0) world_x += dx; end\n";
         out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z, "
@@ -620,29 +727,65 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
         out << "        dx = 0; dy = 0;\n";
         out << "        turn_offset *= 0.8;\n";
 
-        // Inverted controls based on user feedback (A = Clockwise?, D =
-        // Counter-Clockwise?)
         out << "        if (key(_left) || key(_a)) player_angle -= rot_speed; "
                "turn_offset -= 5.0; end\n";
         out << "        if (key(_right) || key(_d)) player_angle += rot_speed; "
                "turn_offset += 5.0; end\n";
 
-        out << "        if (key(_w) || key(_up)) dx += cos(angle_milis_car) * "
-               "move_speed; dy += sin(angle_milis_car) * move_speed; end\n";
-        out << "        if (key(_s) || key(_down)) dx -= cos(angle_milis_car) "
-               "* move_speed; dy -= sin(angle_milis_car) * move_speed; end\n";
+        if (entity.physicsEnabled) {
+          // Physics-based movement (Force = gradual acceleration)
+          out << "        if (key(_w) || key(_up))\n";
+          out << "            RAY_PHYSICS_APPLY_FORCE(sprite_id, "
+                 "cos(angle_milis_car) * move_speed * "
+              << (entity.physicsMass * 200.0f)
+              << ", "
+                 "sin(angle_milis_car) * move_speed * "
+              << (entity.physicsMass * 200.0f) << ", 0);\n";
+          out << "        end\n";
+          out << "        if (key(_s) || key(_down))\n";
+          out << "            RAY_PHYSICS_APPLY_FORCE(sprite_id, "
+                 "-cos(angle_milis_car) * move_speed * "
+              << (entity.physicsMass * 120.0f)
+              << ", "
+                 "-sin(angle_milis_car) * move_speed * "
+              << (entity.physicsMass * 120.0f) << ", 0);\n";
+          out << "        end\n";
+          // Sync world position from physics engine
+          out << "        world_x = RAY_GET_SPRITE_X(sprite_id); world_y = "
+                 "RAY_GET_SPRITE_Y(sprite_id); world_z = "
+                 "RAY_GET_SPRITE_Z(sprite_id);\n";
+        } else {
+          // Manual Tank-Drive Move (Coordinate-based)
+          out << "        if (key(_w) || key(_up))\n";
+          out << "            dx += cos(player_angle * 57295.8) * "
+                 "move_speed;\n";
+          out << "            dy += sin(player_angle * 57295.8) * "
+                 "move_speed;\n";
+          out << "        end\n";
+          out << "        if (key(_s) || key(_down))\n";
+          out << "            dx -= cos(player_angle * 57295.8) * "
+                 "move_speed;\n";
+          out << "            dy -= sin(player_angle * 57295.8) * "
+                 "move_speed;\n";
+          out << "        end\n";
 
-        // Apply movement with collision (Sliding) using object Z at waist level
-        // (+20)
-        out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z + "
-               "20.0, "
-               "world_x + dx, world_y) == 0) world_x += dx; end\n";
-        out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z + "
-               "20.0, "
-               "world_x, world_y + dy) == 0) world_y += dy; end\n";
+          // Cars should NOT step up walls - use very low step height
+          out << "        RAY_SET_STEP_HEIGHT(5.0);\n";
+          // Apply collision against sectors AND sprites
+          out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z "
+                 "+ 5.0, world_x + dx, world_y) == 0 and "
+                 "RAY_CHECK_SPRITE_COLLISION(sprite_id, world_x + dx, world_y, "
+              << (entity.width / 2.0f) << ") < 0) world_x += dx; end\n";
+          out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z "
+                 "+ 5.0, world_x, world_y + dy) == 0 and "
+                 "RAY_CHECK_SPRITE_COLLISION(sprite_id, world_x, world_y + dy, "
+              << (entity.width / 2.0f) << ") < 0) world_y += dy; end\n";
+          out << "        RAY_SET_STEP_HEIGHT(32.0);\n";
+        }
         break;
+
       default:
-        // Default sync for non-player cars
+        // Default sync for non-player entities
         if (!entity.isPlayer &&
             entity.controlType == EntityInstance::CONTROL_CAR) {
           out << "        player_angle = world_angle;\n";
@@ -654,10 +797,10 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
         if (entity.controlType == EntityInstance::CONTROL_THIRD_PERSON ||
             entity.controlType == EntityInstance::CONTROL_CAR) {
           float ox =
-              (entity.cameraOffset_x == 0) ? -200.0f : entity.cameraOffset_x;
+              (entity.cameraOffset_x == 0) ? -400.0f : entity.cameraOffset_x;
           float oy = entity.cameraOffset_y;
           float oz =
-              (entity.cameraOffset_z == 0) ? 120.0f : entity.cameraOffset_z;
+              (entity.cameraOffset_z == 0) ? 150.0f : entity.cameraOffset_z;
 
           out << "        // Chase Camera - Follows vehicle rotation\n";
           out << "        angle_deg = (player_angle + cam_angle_off) * "
@@ -668,11 +811,38 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
           out << "        cy = world_y + s*(" << ox << ") + c*(" << oy
               << ");\n";
           out << "        \n";
+          // Camera collision avoidance
+          out << "        // Camera collision avoidance\n";
+          out << "        cam_safe_x = world_x; cam_safe_y = world_y;\n";
+          out << "        cam_dx = cx - world_x; cam_dy = cy - world_y;\n";
+          out << "        cam_steps = 10;\n";
+          out << "        from cam_i = 1 to cam_steps;\n";
+          out << "            cam_test_x = world_x + (cam_dx * cam_i / "
+                 "cam_steps);\n";
+          out << "            cam_test_y = world_y + (cam_dy * cam_i / "
+                 "cam_steps);\n";
+          out << "            // Use high step_height (100) to ignore "
+                 "curbs/low walls\n";
+          out << "            if (RAY_CHECK_COLLISION_EXT(world_x, world_y, "
+                 "world_z + "
+              << oz << ", cam_test_x, cam_test_y, 100.0))\n";
+          out << "                break;\n";
+          out << "            end\n";
+          out << "            cam_safe_x = cam_test_x;\n";
+          out << "            cam_safe_y = cam_test_y;\n";
+          out << "        end\n";
+
+          // Safety: Don't let the camera get TOO close to the car
+          out << "        cx = cam_safe_x; cy = cam_safe_y;\n";
+          out << "        if (abs(cx - world_x) < 50 and abs(cy - world_y) < "
+                 "50)\n";
+          out << "            cx = world_x; cy = world_y;\n";
+          out << "        end\n";
+
           out << "        RAY_SET_CAMERA(cx, cy, world_z + (" << oz
               << "), player_angle + cam_angle_off, player_pitch);\n";
         }
-        // NOTA: Para First Person no llamamos a RAY_SET_CAMERA porque ya lo
-        // gestiona el motor internamente
+        // For First Person, RAY_SET_CAMERA is handled internally by the engine
       }
     }
 
@@ -682,12 +852,10 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
 
     if (entity.type == "campath") {
       out << "        if (RAY_CAMERA_IS_PLAYING())\n";
-      out << "            begin\n";
-      out << "                RAY_CAMERA_PATH_UPDATE(0.0166);\n";
-      out << "                world_x = RAY_GET_CAMERA_X();\n";
-      out << "                world_y = RAY_GET_CAMERA_Y();\n";
-      out << "                world_z = RAY_GET_CAMERA_Z();\n";
-      out << "            end\n";
+      out << "            RAY_CAMERA_PATH_UPDATE(0.0166);\n";
+      out << "            world_x = RAY_GET_CAMERA_X();\n";
+      out << "            world_y = RAY_GET_CAMERA_Y();\n";
+      out << "            world_z = RAY_GET_CAMERA_Z();\n";
       out << "        end\n";
     }
 
@@ -706,12 +874,37 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
       out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y) + "
              "5.0;\n";
     }
+
+    // Behavior graph update code
+    if (!updateCode.isEmpty()) {
+      out << "        // Behavior Update (Each Frame)\n";
+      out << "        " << updateCode.replace("\n", "\n        ") << "\n";
+    }
+
     out << "        x = world_x; y = world_y; z = world_z;\n";
     if (entity.type == "model") {
       out << "        RAY_UPDATE_SPRITE_POSITION(sprite_id, world_x, world_y, "
              "world_z);\n";
       out << "        RAY_SET_SPRITE_ANGLE(sprite_id, world_angle * "
              "57.2957);\n";
+      if (entity.animSpeed != 0) {
+        out << "        anim_interpolation += "
+            << (qAbs(entity.animSpeed) / 60.0f) << ";\n";
+        out << "        if (anim_interpolation >= 1.0)\n";
+        out << "            anim_interpolation = 0.0;\n";
+        out << "            anim_current_frame++;\n";
+        out << "            if (anim_current_frame > " << entity.endGraph
+            << ") anim_current_frame = " << entity.startGraph << "; end\n";
+        out << "            anim_next_frame = anim_current_frame + 1;\n";
+        out << "            if (anim_next_frame > " << entity.endGraph
+            << ") anim_next_frame = " << entity.startGraph << "; end\n";
+        out << "        end\n";
+        out << "        RAY_SET_SPRITE_ANIM(sprite_id, anim_current_frame, "
+               "anim_next_frame, anim_interpolation);\n";
+      } else {
+        out << "        RAY_SET_SPRITE_ANIM(sprite_id, anim_current_frame, "
+               "anim_next_frame, 0.0);\n";
+      }
     }
 
     out << "        // USER HOOK: Update\n";
@@ -722,8 +915,12 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
 
   case EntityInstance::ACTIVATION_ON_COLLISION:
     out << "    // Activate on collision\n";
+    if (!collisionCode.isEmpty()) {
+      actionCode = collisionCode;
+    }
     out << "    loop\n";
-    out << "        if (collision(collision_target) && !collision_detected)\n";
+    out << "        if (collision(collision_target) and collision_detected == "
+           "0)\n";
     out << "            collision_detected = 1;\n";
     if (!actionCode.isEmpty()) {
       out << "            " << actionCode.replace("\n", "\n            ")
@@ -812,7 +1009,7 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
     out << "end\n\n";
   }
 
-  // Initialize path data helper
+  // Initialize path data helper (function, not process, so it runs inline)
   out << "function npc_paths_init()\n";
   out << "begin\n";
   for (const NPCPath &path : npcPaths) {
@@ -896,7 +1093,7 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
     out << "  return;\n";
   }
 
-  out << "  if (*wait_counter > 0) \n";
+  out << "  if (*wait_counter > 0)\n";
   out << "      *wait_counter = *wait_counter - 1;\n";
   out << "      return;\n";
   out << "  end\n\n";
@@ -907,7 +1104,7 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   out << "  d_dist = sqrt(dx*dx + dy*dy);\n\n";
 
   out << "  if (d_dist < speed)\n";
-  out << "    *cur_x = target_x; \n";
+  out << "    *cur_x = target_x;\n";
   out << "    *cur_y = target_y;\n";
   out << "    *wait_counter = wait_time;\n";
   out << "    switch (loop_mode)\n";
@@ -930,10 +1127,176 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   out << "    if (look_angle >= 0.0)\n";
   out << "        *cur_angle = look_angle * 0.01745329;\n";
   out << "    else\n";
-  out << "        *cur_angle = atan2(dy, dx) * 0.00001745329;\n";
+  out << "        *cur_angle = atan2(dy, dx);\n";
   out << "    end\n";
   out << "  end\n";
   out << "end\n";
 
+  return code;
+}
+
+QString ProcessGenerator::generateGraphCode(const BehaviorGraph &graph,
+                                            const QString &eventType) {
+  if (graph.nodes.isEmpty())
+    return "";
+
+  QMap<int, const NodePinData *> pinMap;
+  QMap<int, const NodeData *> pinToNodeMap;
+
+  for (int i = 0; i < graph.nodes.size(); ++i) {
+    const NodeData &node = graph.nodes[i];
+    for (int j = 0; j < node.pins.size(); ++j) {
+      const NodePinData &pin = node.pins[j];
+      pinMap[pin.pinId] = &pin;
+      pinToNodeMap[pin.pinId] = &node;
+    }
+  }
+
+  // Resolver helper
+  struct Resolver {
+    const QMap<int, const NodePinData *> &pm;
+    const QMap<int, const NodeData *> &ptnm;
+
+    QString resolve(int pinId) const {
+      const NodePinData *pin = pm.value(pinId, nullptr);
+      if (!pin)
+        return "0";
+      if (pin->linkedPinId != -1) {
+        const NodePinData *linkedPin = pm.value(pin->linkedPinId, nullptr);
+        if (linkedPin) {
+          const NodeData *srcNode = ptnm.value(linkedPin->pinId, nullptr);
+          if (srcNode) {
+            if (srcNode->type == "math_dist") {
+              return QString("RAY_GET_DIST(%1, %2)")
+                  .arg(resolve(srcNode->pins[0].pinId))
+                  .arg(resolve(srcNode->pins[1].pinId));
+            } else if (srcNode->type == "math_camera_dist") {
+              return QString("RAY_GET_CAMERA_DIST(%1)")
+                  .arg(resolve(srcNode->pins[0].pinId));
+            } else if (srcNode->type == "math_point_dist") {
+              return QString("RAY_GET_POINT_DIST(%1, %2, %3, %4, %5, %6)")
+                  .arg(resolve(srcNode->pins[0].pinId))
+                  .arg(resolve(srcNode->pins[1].pinId))
+                  .arg(resolve(srcNode->pins[2].pinId))
+                  .arg(resolve(srcNode->pins[3].pinId))
+                  .arg(resolve(srcNode->pins[4].pinId))
+                  .arg(resolve(srcNode->pins[5].pinId));
+            } else if (srcNode->type == "math_angle") {
+              return QString("RAY_GET_ANGLE(%1, %2)")
+                  .arg(resolve(srcNode->pins[0].pinId))
+                  .arg(resolve(srcNode->pins[1].pinId));
+            } else if (srcNode->type == "math_camera_angle") {
+              return QString("RAY_GET_CAMERA_ANGLE(%1)")
+                  .arg(resolve(srcNode->pins[0].pinId));
+            } else if (srcNode->type == "math_op" ||
+                       srcNode->type == "logic_compare") {
+              return QString("(%1 %2 %3)")
+                  .arg(resolve(srcNode->pins[0].pinId))
+                  .arg(srcNode->pins[1].value)
+                  .arg(resolve(srcNode->pins[2].pinId));
+            }
+          }
+        }
+      }
+      return pin->value;
+    }
+  } res = {pinMap, pinToNodeMap};
+
+  QString code;
+  QTextStream out(&code);
+  const NodeData *current = nullptr;
+  for (const auto &node : graph.nodes) {
+    if (node.type == eventType) {
+      current = &node;
+      break;
+    }
+  }
+
+  QSet<int> visited;
+  while (current) {
+    if (visited.contains(current->nodeId))
+      break;
+    visited.insert(current->nodeId);
+
+    if (current->type == "action_say") {
+      out << "        say(" << res.resolve(current->pins[2].pinId) << ");\n";
+    } else if (current->type == "action_kill") {
+      out << "        signal(" << res.resolve(current->pins[1].pinId)
+          << ", s_kill);\n";
+    } else if (current->type == "action_moveto") {
+      QString tx = res.resolve(current->pins[2].pinId);
+      QString ty = res.resolve(current->pins[3].pinId);
+      out << "        RAY_UPDATE_SPRITE_POSITION(sprite_id, " << tx << ", "
+          << ty << ", world_z);\n";
+      out << "        world_x = " << tx << "; world_y = " << ty << ";\n";
+    } else if (current->type == "action_sound") {
+      QString file = res.resolve(current->pins[2].pinId);
+      QString vol = res.resolve(current->pins[3].pinId);
+      QString loops = res.resolve(current->pins[4].pinId);
+      out << "        {\n";
+      out << "            s_id = SOUND_LOAD(\"" << file << "\");\n";
+      out << "            if (s_id > 0)\n";
+      out << "                SOUND_SET_POSITION(s_id, world_x, world_y);\n";
+      out << "                SOUND_SET_VOLUME(s_id, " << vol << ");\n";
+      out << "                SOUND_PLAY(s_id, " << loops << ");\n";
+      out << "            end\n";
+      out << "        }\n";
+    } else if (current->type == "action_shake_camera") {
+      QString intensity = res.resolve(current->pins[2].pinId);
+      QString duration = res.resolve(current->pins[3].pinId);
+      out << "        // Camera Shake: Intensity=" << intensity
+          << " Duration=" << duration << "\n";
+      out << "        cam_shake_intensity = " << intensity << ";\n";
+      out << "        cam_shake_timer = " << duration
+          << " * 60; // Assume 60fps\n";
+    } else if (current->type == "action_spawn_billboard") {
+      QString file = res.resolve(current->pins[2].pinId);
+      QString gStart = res.resolve(current->pins[3].pinId);
+      QString gEnd = res.resolve(current->pins[4].pinId);
+      QString speed = res.resolve(current->pins[5].pinId);
+      QString scale = res.resolve(current->pins[6].pinId);
+      out << "        Billboard_Effect_Process(world_x, world_y, world_z, "
+          << file << ", " << gStart << ", " << gEnd << ", " << speed << ", "
+          << scale << ");\n";
+    } else if (current->type == "action_car_engine") {
+      QString file = res.resolve(current->pins[2].pinId);
+      QString minVol = res.resolve(current->pins[3].pinId);
+      QString maxVol = res.resolve(current->pins[4].pinId);
+      out << "        if (car_engine_id <= 0)\n";
+      out << "            car_engine_id = SOUND_LOAD(\"" << file << "\");\n";
+      out << "            if (car_engine_id > 0) SOUND_PLAY(car_engine_id, "
+             "-1); end\n";
+      out << "        end\n";
+      out << "        if (car_engine_id > 0)\n";
+      out << "            cur_speed = abs(speed);\n";
+      out << "            speed_vol = " << minVol << " + (cur_speed * ("
+          << maxVol << " - " << minVol << ") / 10.0);\n";
+      out << "            if (speed_vol > " << maxVol
+          << ") speed_vol = " << maxVol << "; end\n";
+      out << "            SOUND_SET_VOLUME(car_engine_id, speed_vol);\n";
+      out << "        end\n";
+    } else if (current->type == "logic_if") {
+      out << "        if (" << res.resolve(current->pins[1].pinId) << ")\n";
+    }
+
+    const NodePinData *outPin = nullptr;
+    if (current->type == "logic_if") {
+      outPin = &current->pins[2]; // True branch
+    } else {
+      for (const auto &pin : current->pins) {
+        if (!pin.isInput && pin.isExecution) {
+          outPin = &pin;
+          break;
+        }
+      }
+    }
+
+    if (outPin && outPin->linkedPinId != -1) {
+      const NodePinData *nextIn = pinMap.value(outPin->linkedPinId, nullptr);
+      current = nextIn ? pinToNodeMap.value(nextIn->pinId, nullptr) : nullptr;
+    } else {
+      current = nullptr;
+    }
+  }
   return code;
 }

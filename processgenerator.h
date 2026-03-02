@@ -49,6 +49,10 @@ public:
 
   // Generate NPC path data and helper functions
   static QString generateNPCPathsCode(const QVector<NPCPath> &npcPaths);
+
+  // Translate Behavior Graph nodes to BennuGD code (NEW)
+  static QString generateGraphCode(const BehaviorGraph &graph,
+                                   const QString &eventType = "event_start");
 };
 
 #endif // PROCESSGENERATOR_H

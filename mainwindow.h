@@ -218,6 +218,8 @@ private slots:
   void onSectorLiquidRipplesChanged(bool checked);
   void onSectorLiquidIntensityChanged(double value);
   void onSectorLiquidSpeedChanged(double value);
+  void onSectorFogChanged();
+  void onSectorFogColorClicked();
 
   void onWallNormalLowerChanged(int val);
   void onWallNormalMiddleChanged(int val);
@@ -268,6 +270,7 @@ private:
   QWidget *m_wallPanel;
   QWidget *m_lightPanel;
   QWidget *m_liquidPanel;
+  QWidget *m_fogPanel;
   EntityPropertyPanel *m_entityPanel; // NEW
 
   // Dock widgets
@@ -297,6 +300,12 @@ private:
   QCheckBox *m_sectorLiquidRipplesCheck;
   QDoubleSpinBox *m_sectorLiquidIntensitySpin;
   QDoubleSpinBox *m_sectorLiquidSpeedSpin;
+
+  // Fog controls
+  QPushButton *m_sectorFogColorButton;
+  QDoubleSpinBox *m_sectorFogDensitySpin;
+  QDoubleSpinBox *m_sectorFogStartSpin;
+  QDoubleSpinBox *m_sectorFogEndSpin;
 
   // Wall controls
   QLabel *m_wallIdLabel;
@@ -434,7 +443,8 @@ private:
   QAction *m_placeSpawnModeAction;
   QAction *m_placeCameraModeAction;
   QAction *m_manualPortalModeAction;
-  QAction *m_placeLightModeAction; // NEW
+  QAction *m_placeLightModeAction;  // NEW
+  QAction *m_multiSelectModeAction; // NEW: Selection Tool
   QActionGroup *m_modeGroup;
 
   // Toolbars

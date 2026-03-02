@@ -2,6 +2,7 @@
 #define MAPDATA_H
 
 #include <QByteArray>
+#include <QColor>
 #include <QPixmap>
 #include <QPointF>
 #include <QSet>
@@ -132,6 +133,12 @@ struct Sector {
   float liquid_intensity;
   float liquid_speed;
 
+  /* Fog settings */
+  float fog_color_r, fog_color_g, fog_color_b;
+  float fog_density;
+  float fog_start;
+  float fog_end;
+
   int group_id; // NEW: ID of the group this sector belongs to (-1 if ungrouped)
 
   /* Jerarquía de sectores anidados */
@@ -147,7 +154,9 @@ struct Sector {
       : sector_id(0), floor_z(0.0f), ceiling_z(256.0f), floor_texture_id(0),
         ceiling_texture_id(0), floor_normal_id(0), ceiling_normal_id(0),
         light_level(128), flags(0), liquid_intensity(1.0f), liquid_speed(1.0f),
-        group_id(-1), parent_sector_id(-1) {}
+        group_id(-1), parent_sector_id(-1), fog_color_r(0.5f),
+        fog_color_g(0.5f), fog_color_b(0.5f), fog_density(0.0f),
+        fog_start(100.0f), fog_end(1000.0f) {}
 };
 
 /* ============================================================================
@@ -223,8 +232,10 @@ struct NodeData {
   QString type;
   float x, y;
   QVector<NodePinData> pins;
+  QColor headerColor;
 
-  NodeData() : nodeId(-1), type(""), x(0), y(0) {}
+  NodeData()
+      : nodeId(-1), type(""), x(0), y(0), headerColor(QColor(70, 70, 70)) {}
 };
 
 struct BehaviorGraph {
@@ -301,6 +312,23 @@ struct EntityInstance {
 
   bool collisionEnabled;
 
+  // Physics Engine Properties
+  bool physicsEnabled;
+  float physicsMass;
+  float physicsFriction;
+  float physicsRestitution;
+  float physicsGravityScale;
+  float physicsLinearDamping;
+  float physicsAngularDamping;
+  bool physicsIsStatic;
+  bool physicsIsKinematic;
+  bool physicsIsTrigger;
+  bool physicsLockRotX;
+  bool physicsLockRotY;
+  bool physicsLockRotZ;
+  int physicsCollisionLayer;
+  int physicsCollisionMask;
+
   EntityInstance()
       : spawn_id(0), x(0), y(0), z(0), angle(0),
         activationType(ACTIVATION_ON_START), collisionTarget("TYPE_PLAYER"),
@@ -310,7 +338,13 @@ struct EntityInstance {
         initialRotation(0), isIntro(false), npcPathId(-1), autoStartPath(false),
         snapToFloor(false), graphId(0), startGraph(0), endGraph(0),
         animSpeed(0), billboard_directions(1), width(64), depth(64),
-        height(128), collisionEnabled(true) {}
+        height(128), collisionEnabled(true), physicsEnabled(false),
+        physicsMass(1.0f), physicsFriction(0.5f), physicsRestitution(0.3f),
+        physicsGravityScale(1.0f), physicsLinearDamping(0.05f),
+        physicsAngularDamping(0.1f), physicsIsStatic(false),
+        physicsIsKinematic(false), physicsIsTrigger(false),
+        physicsLockRotX(false), physicsLockRotY(false), physicsLockRotZ(false),
+        physicsCollisionLayer(1), physicsCollisionMask(0xFFFF) {}
 
   EntityInstance(const QString &pname, const QString &asset, const QString &t,
                  int id, float px, float py, float pz)
@@ -323,7 +357,13 @@ struct EntityInstance {
         isIntro(false), npcPathId(-1), autoStartPath(false), snapToFloor(false),
         graphId(0), startGraph(0), endGraph(0), animSpeed(0),
         billboard_directions(1), width(64), depth(64), height(128),
-        collisionEnabled(true) {}
+        collisionEnabled(true), physicsEnabled(false), physicsMass(1.0f),
+        physicsFriction(0.5f), physicsRestitution(0.3f),
+        physicsGravityScale(1.0f), physicsLinearDamping(0.05f),
+        physicsAngularDamping(0.1f), physicsIsStatic(false),
+        physicsIsKinematic(false), physicsIsTrigger(false),
+        physicsLockRotX(false), physicsLockRotY(false), physicsLockRotZ(false),
+        physicsCollisionLayer(1), physicsCollisionMask(0xFFFF) {}
 };
 
 /* ============================================================================

@@ -59,8 +59,8 @@ bool RayMapFormat::loadMap(
   }
 
   /* Verify version */
-  if (version < 8 || version > 28) {
-    qWarning() << "Versión no soportada:" << version << "(solo v8-v28)";
+  if (version < 8 || version > 30) {
+    qWarning() << "Versión no soportada:" << version << "(solo v8-v30)";
     file.close();
     return false;
   }
@@ -433,6 +433,94 @@ bool RayMapFormat::loadMap(
         entity.snapToFloor = false;
       }
 
+      // Version 29 fields (Physics Engine)
+      if (version >= 29 && !in.atEnd()) {
+        int8_t physEnabled = 0;
+        in.readRawData(reinterpret_cast<char *>(&physEnabled), sizeof(int8_t));
+        entity.physicsEnabled = (physEnabled != 0);
+        in.readRawData(reinterpret_cast<char *>(&entity.physicsMass),
+                       sizeof(float));
+        in.readRawData(reinterpret_cast<char *>(&entity.physicsFriction),
+                       sizeof(float));
+        in.readRawData(reinterpret_cast<char *>(&entity.physicsRestitution),
+                       sizeof(float));
+        in.readRawData(reinterpret_cast<char *>(&entity.physicsGravityScale),
+                       sizeof(float));
+        in.readRawData(reinterpret_cast<char *>(&entity.physicsLinearDamping),
+                       sizeof(float));
+        in.readRawData(reinterpret_cast<char *>(&entity.physicsAngularDamping),
+                       sizeof(float));
+        int8_t flags[6];
+        in.readRawData(reinterpret_cast<char *>(flags), 6);
+        entity.physicsIsStatic = (flags[0] != 0);
+        entity.physicsIsKinematic = (flags[1] != 0);
+        entity.physicsIsTrigger = (flags[2] != 0);
+        entity.physicsLockRotX = (flags[3] != 0);
+        entity.physicsLockRotY = (flags[4] != 0);
+        entity.physicsLockRotZ = (flags[5] != 0);
+        int32_t layer, mask;
+        in.readRawData(reinterpret_cast<char *>(&layer), sizeof(int32_t));
+        in.readRawData(reinterpret_cast<char *>(&mask), sizeof(int32_t));
+        entity.physicsCollisionLayer = layer;
+        entity.physicsCollisionMask = mask;
+      }
+
+      // Version 30 fields (Behavior Nodes)
+      if (version >= 30 && !in.atEnd()) {
+        uint32_t numNodes;
+        in.readRawData(reinterpret_cast<char *>(&numNodes), sizeof(uint32_t));
+        for (uint32_t n = 0; n < numNodes; ++n) {
+          NodeData node;
+          in.readRawData(reinterpret_cast<char *>(&node.nodeId),
+                         sizeof(int32_t));
+          uint32_t typeLen;
+          in.readRawData(reinterpret_cast<char *>(&typeLen), sizeof(uint32_t));
+          QByteArray typeBytes;
+          typeBytes.resize(typeLen);
+          in.readRawData(typeBytes.data(), typeLen);
+          node.type = QString::fromUtf8(typeBytes);
+          in.readRawData(reinterpret_cast<char *>(&node.x), sizeof(float));
+          in.readRawData(reinterpret_cast<char *>(&node.y), sizeof(float));
+
+          uint32_t numPins;
+          in.readRawData(reinterpret_cast<char *>(&numPins), sizeof(uint32_t));
+          for (uint32_t p = 0; p < numPins; ++p) {
+            NodePinData pin;
+            in.readRawData(reinterpret_cast<char *>(&pin.pinId),
+                           sizeof(int32_t));
+            uint32_t nameLen;
+            in.readRawData(reinterpret_cast<char *>(&nameLen),
+                           sizeof(uint32_t));
+            QByteArray nameBytes;
+            nameBytes.resize(nameLen);
+            in.readRawData(nameBytes.data(), nameLen);
+            pin.name = QString::fromUtf8(nameBytes);
+            int8_t bIn, bExec;
+            in.readRawData(reinterpret_cast<char *>(&bIn), sizeof(int8_t));
+            in.readRawData(reinterpret_cast<char *>(&bExec), sizeof(int8_t));
+            pin.isInput = (bIn != 0);
+            pin.isExecution = (bExec != 0);
+
+            uint32_t valLen;
+            in.readRawData(reinterpret_cast<char *>(&valLen), sizeof(uint32_t));
+            QByteArray valBytes;
+            valBytes.resize(valLen);
+            in.readRawData(valBytes.data(), valLen);
+            pin.value = QString::fromUtf8(valBytes);
+            in.readRawData(reinterpret_cast<char *>(&pin.linkedPinId),
+                           sizeof(int32_t));
+            node.pins.append(pin);
+          }
+          entity.behaviorGraph.nodes.append(node);
+        }
+        in.readRawData(
+            reinterpret_cast<char *>(&entity.behaviorGraph.nextNodeId),
+            sizeof(int32_t));
+        in.readRawData(
+            reinterpret_cast<char *>(&entity.behaviorGraph.nextPinId),
+            sizeof(int32_t));
+      }
+
       // Generate processName from asset path if not set
       // (for backward compatibility with old maps or if explicit name missing)
       // Note: We always regenerate for now to ensure consistency with filename
@@ -601,7 +689,8 @@ bool RayMapFormat::saveMap(
   }
   // --------------------------------------------
 
-  const uint32_t version = 28; /* v28: Fog support */
+  const uint32_t version = 30; /* v30: Behavior Nodes */
+                               // v29: Physics Engine
                                // v24: Normals, v25: Lights, v26: Fluid Params,
                                // v27: Liquid Speed, v28: Fog
   uint32_t num_sectors = mapData.sectors.size();
@@ -939,6 +1028,89 @@ bool RayMapFormat::saveMap(
     // Snap to floor (v15)
     int8_t snapVal = entity.snapToFloor ? 1 : 0;
     out.writeRawData(reinterpret_cast<const char *>(&snapVal), sizeof(int8_t));
+
+    // Physics Engine (v29)
+    int8_t physEnabled = entity.physicsEnabled ? 1 : 0;
+    out.writeRawData(reinterpret_cast<const char *>(&physEnabled),
+                     sizeof(int8_t));
+    out.writeRawData(reinterpret_cast<const char *>(&entity.physicsMass),
+                     sizeof(float));
+    out.writeRawData(reinterpret_cast<const char *>(&entity.physicsFriction),
+                     sizeof(float));
+    out.writeRawData(reinterpret_cast<const char *>(&entity.physicsRestitution),
+                     sizeof(float));
+    out.writeRawData(
+        reinterpret_cast<const char *>(&entity.physicsGravityScale),
+        sizeof(float));
+    out.writeRawData(
+        reinterpret_cast<const char *>(&entity.physicsLinearDamping),
+        sizeof(float));
+    out.writeRawData(
+        reinterpret_cast<const char *>(&entity.physicsAngularDamping),
+        sizeof(float));
+    int8_t flags[6] = {(int8_t)(entity.physicsIsStatic ? 1 : 0),
+                       (int8_t)(entity.physicsIsKinematic ? 1 : 0),
+                       (int8_t)(entity.physicsIsTrigger ? 1 : 0),
+                       (int8_t)(entity.physicsLockRotX ? 1 : 0),
+                       (int8_t)(entity.physicsLockRotY ? 1 : 0),
+                       (int8_t)(entity.physicsLockRotZ ? 1 : 0)};
+    out.writeRawData(reinterpret_cast<const char *>(flags), 6);
+    int32_t layer = entity.physicsCollisionLayer;
+    int32_t mask = entity.physicsCollisionMask;
+    out.writeRawData(reinterpret_cast<const char *>(&layer), sizeof(int32_t));
+    out.writeRawData(reinterpret_cast<const char *>(&mask), sizeof(int32_t));
+
+    // Behavior Graph (v30)
+    if (version >= 30) {
+      uint32_t numNodes = entity.behaviorGraph.nodes.size();
+      out.writeRawData(reinterpret_cast<const char *>(&numNodes),
+                       sizeof(uint32_t));
+      for (const auto &node : entity.behaviorGraph.nodes) {
+        out.writeRawData(reinterpret_cast<const char *>(&node.nodeId),
+                         sizeof(int32_t));
+        QByteArray typeBytes = node.type.toUtf8();
+        uint32_t typeLen = typeBytes.size();
+        out.writeRawData(reinterpret_cast<const char *>(&typeLen),
+                         sizeof(uint32_t));
+        out.writeRawData(typeBytes.data(), typeLen);
+        out.writeRawData(reinterpret_cast<const char *>(&node.x),
+                         sizeof(float));
+        out.writeRawData(reinterpret_cast<const char *>(&node.y),
+                         sizeof(float));
+
+        uint32_t numPins = node.pins.size();
+        out.writeRawData(reinterpret_cast<const char *>(&numPins),
+                         sizeof(uint32_t));
+        for (const auto &pin : node.pins) {
+          out.writeRawData(reinterpret_cast<const char *>(&pin.pinId),
+                           sizeof(int32_t));
+          QByteArray pinNameBytes = pin.name.toUtf8();
+          uint32_t pinNameLen = pinNameBytes.size();
+          out.writeRawData(reinterpret_cast<const char *>(&pinNameLen),
+                           sizeof(uint32_t));
+          out.writeRawData(pinNameBytes.data(), pinNameLen);
+          int8_t bIn = pin.isInput ? 1 : 0;
+          int8_t bExec = pin.isExecution ? 1 : 0;
+          out.writeRawData(reinterpret_cast<const char *>(&bIn),
+                           sizeof(int8_t));
+          out.writeRawData(reinterpret_cast<const char *>(&bExec),
+                           sizeof(int8_t));
+          QByteArray pinValBytes = pin.value.toUtf8();
+          uint32_t pinValLen = pinValBytes.size();
+          out.writeRawData(reinterpret_cast<const char *>(&pinValLen),
+                           sizeof(uint32_t));
+          out.writeRawData(pinValBytes.data(), pinValLen);
+          out.writeRawData(reinterpret_cast<const char *>(&pin.linkedPinId),
+                           sizeof(int32_t));
+        }
+      }
+      out.writeRawData(
+          reinterpret_cast<const char *>(&entity.behaviorGraph.nextNodeId),
+          sizeof(int32_t));
+      out.writeRawData(
+          reinterpret_cast<const char *>(&entity.behaviorGraph.nextPinId),
+          sizeof(int32_t));
+    }
   }
 
   // ===== NPC PATHS (v13) =====

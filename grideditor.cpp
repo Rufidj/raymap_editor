@@ -24,9 +24,10 @@
 GridEditor::GridEditor(QWidget *parent)
     : QWidget(parent), m_mapData(new MapData()), m_editMode(MODE_SELECT_SECTOR),
       m_selectedTexture(1), m_selectedSector(-1), m_selectedWall(-1),
-      m_selectedWallSector(-1), m_selectedWallIndex(-1), m_zoom(1.0f),
-      m_panX(0.0f), m_panY(0.0f), m_isDrawing(false), m_isDraggingSector(false),
-      m_isDraggingEntity(false), m_draggedVertex(-1),
+      m_selectedWallSector(-1), m_selectedWallIndex(-1), m_selectedEntity(-1),
+      m_zoom(1.0f), m_panX(0.0f), m_panY(0.0f), m_isDrawing(false),
+      m_isDraggingSector(false), m_isDraggingEntity(false), m_draggedVertex(-1),
+      m_isSelecting(false), m_isMovingMultiSelection(false),
       m_hasCameraPosition(false), m_cameraX(0.0f), m_cameraY(0.0f),
       m_manualPortalMode(false), m_isMovingGroup(false), m_movingGroupId(-1),
       m_showGrid(true) // Default true
@@ -501,6 +502,41 @@ void GridEditor::paintEvent(QPaintEvent *event) {
     }
   }
 
+  // Draw multi-selection rectangle
+  if (m_isSelecting) {
+    painter.setPen(QPen(QColor(0, 120, 255), 1, Qt::DashLine));
+    painter.setBrush(QBrush(QColor(0, 120, 255, 40)));
+    QRect screenRect(worldToScreen(m_selectionRect.topLeft()),
+                     worldToScreen(m_selectionRect.bottomRight()));
+    painter.drawRect(screenRect);
+  }
+
+  // Draw multi-selection highlights
+  painter.setBrush(QBrush(QColor(255, 255, 0, 100)));
+  painter.setPen(QPen(Qt::yellow, 2));
+  for (int idx : m_multiSelectedSectors) {
+    if (idx >= 0 && idx < m_mapData->sectors.size()) {
+      QPolygonF poly;
+      for (const QPointF &v : m_mapData->sectors[idx].vertices)
+        poly << worldToScreen(v);
+      painter.drawPolygon(poly);
+    }
+  }
+  for (int idx : m_multiSelectedEntities) {
+    if (idx >= 0 && idx < m_mapData->entities.size()) {
+      QPoint p = worldToScreen(
+          QPointF(m_mapData->entities[idx].x, m_mapData->entities[idx].y));
+      painter.drawRect(p.x() - 8, p.y() - 8, 16, 16);
+    }
+  }
+  for (int idx : m_multiSelectedLights) {
+    if (idx >= 0 && idx < m_mapData->lights.size()) {
+      QPoint p = worldToScreen(
+          QPointF(m_mapData->lights[idx].x, m_mapData->lights[idx].y));
+      painter.drawEllipse(p, 10, 10);
+    }
+  }
+
   // Draw cursor coordinates
   drawCursorInfo(painter);
 }
@@ -953,6 +989,76 @@ void GridEditor::mousePressEvent(QMouseEvent *event) {
       break;
     }
 
+    case MODE_MULTI_SELECT: {
+      bool clickedOnSelected = false;
+      // Check if we clicked on any of the currently multi-selected things
+      if (!m_multiSelectedSectors.isEmpty() ||
+          !m_multiSelectedEntities.isEmpty() ||
+          !m_multiSelectedLights.isEmpty()) {
+
+        // Check entities
+        int entIdx = findEntityAt(worldPos, 20.0f);
+        if (entIdx >= 0 && m_multiSelectedEntities.contains(entIdx))
+          clickedOnSelected = true;
+
+        // Check lights
+        if (!clickedOnSelected) {
+          int lightIdx = findLightAt(worldPos, 20.0f);
+          if (lightIdx >= 0 && m_multiSelectedLights.contains(lightIdx))
+            clickedOnSelected = true;
+        }
+
+        // Check sectors
+        if (!clickedOnSelected && m_mapData) {
+          for (int idx : m_multiSelectedSectors) {
+            if (idx >= 0 && idx < m_mapData->sectors.size()) {
+              QPolygonF poly;
+              for (const auto &v : m_mapData->sectors[idx].vertices)
+                poly << v;
+              if (poly.containsPoint(worldPos, Qt::OddEvenFill)) {
+                clickedOnSelected = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (clickedOnSelected) {
+        m_isMovingMultiSelection = true;
+        m_multiMoveStartPos = worldPos;
+        m_initialMultiSelectedSectorVertices.clear();
+        m_initialMultiSelectedEntityPositions.clear();
+        m_initialMultiSelectedLightPositions.clear();
+
+        for (int idx : m_multiSelectedSectors) {
+          if (idx >= 0 && idx < m_mapData->sectors.size())
+            m_initialMultiSelectedSectorVertices[idx] =
+                m_mapData->sectors[idx].vertices;
+        }
+        for (int idx : m_multiSelectedEntities) {
+          if (idx >= 0 && idx < m_mapData->entities.size())
+            m_initialMultiSelectedEntityPositions[idx] =
+                QPointF(m_mapData->entities[idx].x, m_mapData->entities[idx].y);
+        }
+        for (int idx : m_multiSelectedLights) {
+          if (idx >= 0 && idx < m_mapData->lights.size())
+            m_initialMultiSelectedLightPositions[idx] =
+                QPointF(m_mapData->lights[idx].x, m_mapData->lights[idx].y);
+        }
+        setCursor(Qt::SizeAllCursor);
+      } else {
+        m_isSelecting = true;
+        m_selectionStart = worldPos;
+        m_selectionRect = QRectF(worldPos, QSizeF(0, 0));
+        m_multiSelectedSectors.clear();
+        m_multiSelectedEntities.clear();
+        m_multiSelectedLights.clear();
+        update();
+      }
+      break;
+    }
+
     default:
       break;
     }
@@ -1161,6 +1267,77 @@ void GridEditor::mouseMoveEvent(QMouseEvent *event) {
 
     return;
   }
+
+  // Multi-selection movement
+  if (m_isMovingMultiSelection && m_mapData) {
+    QPointF offset = worldPos - m_multiMoveStartPos;
+
+    // Move sectors
+    for (int idx : m_multiSelectedSectors) {
+      if (m_initialMultiSelectedSectorVertices.contains(idx)) {
+        Sector &s = m_mapData->sectors[idx];
+        const QVector<QPointF> &initial =
+            m_initialMultiSelectedSectorVertices[idx];
+        for (int i = 0; i < s.vertices.size() && i < initial.size(); ++i) {
+          s.vertices[i] = initial[i] + offset;
+        }
+        // Update walls
+        for (int i = 0; i < s.walls.size(); ++i) {
+          int v1 = i;
+          int v2 = (i + 1) % s.vertices.size();
+          if (v1 < s.vertices.size() && v2 < s.vertices.size()) {
+            s.walls[i].x1 = s.vertices[v1].x();
+            s.walls[i].y1 = s.vertices[v1].y();
+            s.walls[i].x2 = s.vertices[v2].x();
+            s.walls[i].y2 = s.vertices[v2].y();
+          }
+        }
+      }
+    }
+
+    // Move entities
+    for (int idx : m_multiSelectedEntities) {
+      if (m_initialMultiSelectedEntityPositions.contains(idx)) {
+        EntityInstance &e = m_mapData->entities[idx];
+        QPointF initial = m_initialMultiSelectedEntityPositions[idx];
+        e.x = initial.x() + offset.x();
+        e.y = initial.y() + offset.y();
+
+        // Update associated spawn flag
+        int spawnId = e.spawn_id;
+        for (int i = 0; i < m_mapData->spawnFlags.size(); ++i) {
+          if (m_mapData->spawnFlags[i].flagId == spawnId) {
+            m_mapData->spawnFlags[i].x = e.x;
+            m_mapData->spawnFlags[i].y = e.y;
+            break;
+          }
+        }
+
+        // Emit changed for visual update
+        emit entityMoved(idx, e);
+      }
+    }
+
+    // Move lights
+    for (int idx : m_multiSelectedLights) {
+      if (m_initialMultiSelectedLightPositions.contains(idx)) {
+        Light &l = m_mapData->lights[idx];
+        QPointF initial = m_initialMultiSelectedLightPositions[idx];
+        l.x = initial.x() + offset.x();
+        l.y = initial.y() + offset.y();
+      }
+    }
+
+    update();
+    return;
+  }
+
+  // Handle Multi-selection rectangle update
+  if (m_editMode == MODE_MULTI_SELECT && m_isSelecting) {
+    m_selectionRect = QRectF(m_selectionStart, worldPos).normalized();
+    update();
+    return;
+  }
 }
 
 void GridEditor::mouseReleaseEvent(QMouseEvent *event) {
@@ -1180,6 +1357,62 @@ void GridEditor::mouseReleaseEvent(QMouseEvent *event) {
       setCursor(Qt::ArrowCursor);
       emit mapChanged(); // Important to notify changes
     }
+
+    if (m_isMovingMultiSelection) {
+      m_isMovingMultiSelection = false;
+      m_initialMultiSelectedSectorVertices.clear();
+      m_initialMultiSelectedEntityPositions.clear();
+      m_initialMultiSelectedLightPositions.clear();
+      setCursor(Qt::ArrowCursor);
+
+      // Auto-parent all moved sectors
+      for (int idx : m_multiSelectedSectors) {
+        autoParentSector(idx);
+      }
+
+      emit mapChanged();
+      update();
+    }
+
+    if (m_editMode == MODE_MULTI_SELECT && m_isSelecting) {
+      m_isSelecting = false;
+      // Finalize selection
+      m_multiSelectedSectors.clear();
+      m_multiSelectedEntities.clear();
+      m_multiSelectedLights.clear();
+
+      if (m_mapData) {
+        // Find sectors in rect
+        for (int i = 0; i < m_mapData->sectors.size(); ++i) {
+          const Sector &s = m_mapData->sectors[i];
+          // Check if any vertex is inside, or center (simplification)
+          QPointF center(0, 0);
+          for (const QPointF &v : s.vertices)
+            center += v;
+          center /= s.vertices.size();
+          if (m_selectionRect.contains(center)) {
+            m_multiSelectedSectors.append(i);
+          }
+        }
+
+        // Find entities in rect
+        for (int i = 0; i < m_mapData->entities.size(); ++i) {
+          const EntityInstance &e = m_mapData->entities[i];
+          if (m_selectionRect.contains(QPointF(e.x, e.y))) {
+            m_multiSelectedEntities.append(i);
+          }
+        }
+
+        // Find lights in rect
+        for (int i = 0; i < m_mapData->lights.size(); ++i) {
+          const Light &l = m_mapData->lights[i];
+          if (m_selectionRect.contains(QPointF(l.x, l.y))) {
+            m_multiSelectedLights.append(i);
+          }
+        }
+      }
+      update();
+    }
   } else if (event->button() == Qt::MiddleButton) {
     setCursor(Qt::CrossCursor);
   }
@@ -1196,6 +1429,27 @@ void GridEditor::keyPressEvent(QKeyEvent *event) {
     }
   }
 
+  // Multi-selection shortcuts
+  if (event->key() == Qt::Key_Delete) {
+    deleteSelection();
+    return;
+  }
+  if (event->modifiers() & Qt::ControlModifier) {
+    if (event->key() == Qt::Key_C) {
+      copySelection();
+      return;
+    }
+    if (event->key() == Qt::Key_V) {
+      pasteSelection();
+      return;
+    }
+    if (event->key() == Qt::Key_X) {
+      copySelection();
+      deleteSelection();
+      return;
+    }
+  }
+
   // Slope Editing Keys REMOVED
 
   QWidget::keyPressEvent(event);
@@ -1203,6 +1457,36 @@ void GridEditor::keyPressEvent(QKeyEvent *event) {
 
 void GridEditor::contextMenuEvent(QContextMenuEvent *event) {
   QPointF worldPos = screenToWorld(event->pos());
+  m_lastCursorPos = worldPos; // Store for pasteSelection()
+
+  bool hasSelection = !m_multiSelectedSectors.isEmpty() ||
+                      !m_multiSelectedEntities.isEmpty() ||
+                      !m_multiSelectedLights.isEmpty();
+  bool hasBuffer = !m_copyBufferSectors.isEmpty() ||
+                   !m_copyBufferEntities.isEmpty() ||
+                   !m_copyBufferLights.isEmpty();
+
+  // Multi-selection context menu
+  if (hasSelection) {
+    QMenu menu(this);
+    QAction *copyAction = menu.addAction(tr("Copiar Selección"));
+    QAction *deleteAction = menu.addAction(tr("Eliminar Selección"));
+    QAction *pasteAction = nullptr;
+    if (hasBuffer) {
+      menu.addSeparator();
+      pasteAction = menu.addAction(tr("Pegar Selección Aquí"));
+    }
+
+    QAction *selectedItem = menu.exec(event->globalPos());
+    if (selectedItem == copyAction) {
+      copySelection();
+    } else if (selectedItem == deleteAction) {
+      deleteSelection();
+    } else if (pasteAction && selectedItem == pasteAction) {
+      pasteSelection();
+    }
+    return;
+  }
 
   // Check for entity first (highest priority)
   int entityIdx =
@@ -1216,6 +1500,13 @@ void GridEditor::contextMenuEvent(QContextMenuEvent *event) {
     QAction *editBehaviorAction =
         menu.addAction(tr("Editar Comportamiento..."));
     menu.addSeparator();
+
+    QAction *pasteAction = nullptr;
+    if (hasBuffer) {
+      pasteAction = menu.addAction(tr("Pegar Selección Aquí"));
+      menu.addSeparator();
+    }
+
     QAction *deleteAction = menu.addAction(tr("Eliminar Entidad '%1' (ID %2)")
                                                .arg(info.fileName())
                                                .arg(ent.spawn_id));
@@ -1223,6 +1514,8 @@ void GridEditor::contextMenuEvent(QContextMenuEvent *event) {
     QAction *selectedItem = menu.exec(event->globalPos());
     if (selectedItem == editBehaviorAction) {
       emit requestEditEntityBehavior(entityIdx, ent);
+    } else if (pasteAction && selectedItem == pasteAction) {
+      pasteSelection();
     } else if (selectedItem == deleteAction) {
       // Find and remove associated spawn flag
       int spawnId = ent.spawn_id;
@@ -1258,11 +1551,18 @@ void GridEditor::contextMenuEvent(QContextMenuEvent *event) {
     const SpawnFlag &flag = m_mapData->spawnFlags[flagIdx];
 
     QMenu menu(this);
+    QAction *pasteAction = nullptr;
+    if (hasBuffer) {
+      pasteAction = menu.addAction(tr("Pegar Selección Aquí"));
+      menu.addSeparator();
+    }
     QAction *deleteAction =
         menu.addAction(tr("Eliminar Spawn Flag (ID %1)").arg(flag.flagId));
 
     QAction *selectedItem = menu.exec(event->globalPos());
-    if (selectedItem == deleteAction) {
+    if (pasteAction && selectedItem == pasteAction) {
+      pasteSelection();
+    } else if (selectedItem == deleteAction) {
       // Find and remove associated entity
       int flagId = flag.flagId;
       for (int i = 0; i < m_mapData->entities.size(); ++i) {
@@ -1292,22 +1592,42 @@ void GridEditor::contextMenuEvent(QContextMenuEvent *event) {
   // Check for wall/portal
   int wallIdx = findWallAt(worldPos);
 
-  // Check if we hit a wall in any sector (findWallAt updates m_selectedSector
-  // if found)
+  // Check if we hit a wall in any sector
   if (wallIdx >= 0 && m_selectedSector >= 0 &&
       m_selectedSector < m_mapData->sectors.size()) {
     const Wall &wall = m_mapData->sectors[m_selectedSector].walls[wallIdx];
 
-    if (wall.portal_id >= 0) {
-      QMenu menu(this);
-      QAction *deleteAction =
-          menu.addAction(tr("Eliminar Portal (ID %1)").arg(wall.portal_id));
+    QMenu menu(this);
+    QAction *pasteAction = nullptr;
+    if (hasBuffer) {
+      pasteAction = menu.addAction(tr("Pegar Selección Aquí"));
+      menu.addSeparator();
+    }
 
-      // Execute menu
+    QAction *deletePortalAction = nullptr;
+    if (wall.portal_id >= 0) {
+      deletePortalAction =
+          menu.addAction(tr("Eliminar Portal (ID %1)").arg(wall.portal_id));
+    }
+
+    if (!menu.isEmpty()) {
       QAction *selectedItem = menu.exec(event->globalPos());
-      if (selectedItem == deleteAction) {
+      if (pasteAction && selectedItem == pasteAction) {
+        pasteSelection();
+      } else if (deletePortalAction && selectedItem == deletePortalAction) {
         emit requestDeletePortal(m_selectedSector, wallIdx);
       }
+      return;
+    }
+  }
+
+  // Generic menu for empty space
+  if (hasBuffer) {
+    QMenu menu(this);
+    QAction *pasteAction = menu.addAction(tr("Pegar Selección Aquí"));
+    QAction *selectedItem = menu.exec(event->globalPos());
+    if (selectedItem == pasteAction) {
+      pasteSelection();
     }
   }
 }
@@ -1661,4 +1981,177 @@ void GridEditor::autoParentSector(int sectorIdx) {
       }
     }
   }
+}
+
+void GridEditor::deleteSelection() {
+  if (!m_mapData)
+    return;
+
+  // Lights
+  std::sort(m_multiSelectedLights.begin(), m_multiSelectedLights.end(),
+            std::greater<int>());
+  for (int idx : m_multiSelectedLights) {
+    if (idx >= 0 && idx < m_mapData->lights.size())
+      m_mapData->lights.removeAt(idx);
+  }
+  m_multiSelectedLights.clear();
+
+  // Entities
+  std::sort(m_multiSelectedEntities.begin(), m_multiSelectedEntities.end(),
+            std::greater<int>());
+  for (int idx : m_multiSelectedEntities) {
+    if (idx >= 0 && idx < m_mapData->entities.size()) {
+      // Also remove associated spawn flag if any
+      int spawnId = m_mapData->entities[idx].spawn_id;
+      for (int i = 0; i < m_mapData->spawnFlags.size(); ++i) {
+        if (m_mapData->spawnFlags[i].flagId == spawnId) {
+          m_mapData->spawnFlags.removeAt(i);
+          break;
+        }
+      }
+      m_mapData->entities.removeAt(idx);
+    }
+  }
+  m_multiSelectedEntities.clear();
+  m_selectedEntity = -1;
+
+  // Sectors
+  std::sort(m_multiSelectedSectors.begin(), m_multiSelectedSectors.end(),
+            std::greater<int>());
+  for (int idx : m_multiSelectedSectors) {
+    if (idx >= 0 && idx < m_mapData->sectors.size()) {
+      // Find and remove portals associated with this sector
+      int sectorId = m_mapData->sectors[idx].sector_id;
+      for (int p = m_mapData->portals.size() - 1; p >= 0; --p) {
+        if (m_mapData->portals[p].sector_a == sectorId ||
+            m_mapData->portals[p].sector_b == sectorId) {
+          m_mapData->portals.removeAt(p);
+        }
+      }
+      m_mapData->sectors.removeAt(idx);
+    }
+  }
+  m_multiSelectedSectors.clear();
+  m_selectedSector = -1;
+
+  emit mapChanged();
+  update();
+}
+
+void GridEditor::copySelection() {
+  if (!m_mapData)
+    return;
+
+  m_copyBufferSectors.clear();
+  m_copyBufferEntities.clear();
+  m_copyBufferLights.clear();
+
+  for (int idx : m_multiSelectedSectors) {
+    if (idx >= 0 && idx < m_mapData->sectors.size())
+      m_copyBufferSectors.append(m_mapData->sectors[idx]);
+  }
+  for (int idx : m_multiSelectedEntities) {
+    if (idx >= 0 && idx < m_mapData->entities.size())
+      m_copyBufferEntities.append(m_mapData->entities[idx]);
+  }
+  for (int idx : m_multiSelectedLights) {
+    if (idx >= 0 && idx < m_mapData->lights.size())
+      m_copyBufferLights.append(m_mapData->lights[idx]);
+  }
+}
+
+void GridEditor::pasteSelection() {
+  if (!m_mapData)
+    return;
+
+  if (m_copyBufferSectors.isEmpty() && m_copyBufferEntities.isEmpty() &&
+      m_copyBufferLights.isEmpty())
+    return;
+
+  // Calculate center of copied items to offset them to cursor
+  QPointF minP(FLT_MAX, FLT_MAX);
+  QPointF maxP(-FLT_MAX, -FLT_MAX);
+  bool hasBounds = false;
+
+  for (const Sector &s : m_copyBufferSectors) {
+    for (const QPointF &v : s.vertices) {
+      minP.setX(qMin(minP.x(), v.x()));
+      minP.setY(qMin(minP.y(), v.y()));
+      maxP.setX(qMax(maxP.x(), v.x()));
+      maxP.setY(qMax(maxP.y(), v.y()));
+      hasBounds = true;
+    }
+  }
+  for (const EntityInstance &e : m_copyBufferEntities) {
+    minP.setX(qMin(minP.x(), (qreal)e.x));
+    minP.setY(qMin(minP.y(), (qreal)e.y));
+    maxP.setX(qMax(maxP.x(), (qreal)e.x));
+    maxP.setY(qMax(maxP.y(), (qreal)e.y));
+    hasBounds = true;
+  }
+  for (const Light &l : m_copyBufferLights) {
+    minP.setX(qMin(minP.x(), (qreal)l.x));
+    minP.setY(qMin(minP.y(), (qreal)l.y));
+    maxP.setX(qMax(maxP.x(), (qreal)l.x));
+    maxP.setY(qMax(maxP.y(), (qreal)l.y));
+    hasBounds = true;
+  }
+
+  // Correction: EntityInstance has x, y as float (Bennu/MapData specific)
+  // Let's re-verify EntityInstance members if possible or assume x, y
+
+  QPointF offset(0, 0);
+  if (hasBounds) {
+    QPointF center = (minP + maxP) / 2.0;
+    offset = m_lastCursorPos - center;
+  }
+
+  m_multiSelectedSectors.clear();
+  m_multiSelectedEntities.clear();
+  m_multiSelectedLights.clear();
+
+  for (Sector s : m_copyBufferSectors) {
+    s.sector_id = m_mapData->getNextSectorId();
+    for (int i = 0; i < s.vertices.size(); ++i) {
+      s.vertices[i] += offset;
+    }
+    for (int i = 0; i < s.walls.size(); ++i) {
+      s.walls[i].wall_id = m_mapData->getNextWallId();
+      s.walls[i].x1 += offset.x();
+      s.walls[i].y1 += offset.y();
+      s.walls[i].x2 += offset.x();
+      s.walls[i].y2 += offset.y();
+      s.walls[i].portal_id = -1; // Portals are not copied for now to avoid mess
+    }
+    m_mapData->sectors.append(s);
+    m_multiSelectedSectors.append(m_mapData->sectors.size() - 1);
+  }
+
+  for (EntityInstance e : m_copyBufferEntities) {
+    e.x += offset.x();
+    e.y += offset.y();
+    e.spawn_id = m_mapData->getNextSpawnEntityId();
+
+    // Also create the spawn flag
+    SpawnFlag flag;
+    flag.flagId = e.spawn_id;
+    flag.x = e.x;
+    flag.y = e.y;
+    flag.z = e.z;
+    m_mapData->spawnFlags.append(flag);
+
+    m_mapData->entities.append(e);
+    m_multiSelectedEntities.append(m_mapData->entities.size() - 1);
+  }
+
+  for (Light l : m_copyBufferLights) {
+    l.x += offset.x();
+    l.y += offset.y();
+    l.id = m_mapData->lights.size();
+    m_mapData->lights.append(l);
+    m_multiSelectedLights.append(m_mapData->lights.size() - 1);
+  }
+
+  emit mapChanged();
+  update();
 }

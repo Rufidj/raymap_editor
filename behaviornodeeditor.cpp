@@ -157,11 +157,17 @@ void BehaviorNodeItem::paint(QPainter *painter,
   painter->drawRoundedRect(boundingRect(), 8, 8);
 
   // Header
-  QColor headerColor(70, 70, 70);
-  if (m_data->type.startsWith("event"))
-    headerColor = QColor(150, 50, 50);
-  else if (m_data->type.startsWith("action"))
-    headerColor = QColor(50, 80, 150);
+  QColor headerColor = m_data->headerColor;
+  if (headerColor == QColor(70, 70, 70)) {
+    if (m_data->type.startsWith("event"))
+      headerColor = QColor(150, 50, 50);
+    else if (m_data->type.startsWith("action"))
+      headerColor = QColor(50, 80, 150);
+    else if (m_data->type.startsWith("math"))
+      headerColor = QColor(100, 50, 150);
+    else if (m_data->type.startsWith("logic"))
+      headerColor = QColor(50, 150, 80);
+  }
 
   painter->setBrush(headerColor);
   painter->setPen(Qt::NoPen);
@@ -420,7 +426,7 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     data.pins.append(pOut);
     data.pins.append(pFile);
   } else if (type == "action_sound") {
-    NodePinData pIn, pOut, pFile;
+    NodePinData pIn, pOut, pFile, pVolume, pLoops;
     pIn.pinId = m_graph.nextPinId++;
     pIn.name = "In";
     pIn.isInput = true;
@@ -433,10 +439,46 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     pFile.name = "File";
     pFile.isInput = true;
     pFile.isExecution = false;
-    pFile.value = "assets/sfx/jump.wav";
+    pFile.value = "assets/sfx/engine.wav";
+    pVolume.pinId = m_graph.nextPinId++;
+    pVolume.name = "Volume";
+    pVolume.isInput = true;
+    pVolume.isExecution = false;
+    pVolume.value = "128";
+    pLoops.pinId = m_graph.nextPinId++;
+    pLoops.name = "Loops";
+    pLoops.isInput = true;
+    pLoops.isExecution = false;
+    pLoops.value = "0"; // 0 = once, -1 = infinite
     data.pins.append(pIn);
     data.pins.append(pOut);
     data.pins.append(pFile);
+    data.pins.append(pVolume);
+    data.pins.append(pLoops);
+  } else if (type == "action_shake_camera") {
+    NodePinData pIn, pOut, pIntensity, pDuration;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pIntensity.pinId = m_graph.nextPinId++;
+    pIntensity.name = "Intensity";
+    pIntensity.isInput = true;
+    pIntensity.isExecution = false;
+    pIntensity.value = "5.0";
+    pDuration.pinId = m_graph.nextPinId++;
+    pDuration.name = "Duration";
+    pDuration.isInput = true;
+    pDuration.isExecution = false;
+    pDuration.value = "0.5";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pIntensity);
+    data.pins.append(pDuration);
   } else if (type == "action_kill") {
     NodePinData pIn, pTarget;
     pIn.pinId = m_graph.nextPinId++;
@@ -567,6 +609,106 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     data.pins.append(pOp);
     data.pins.append(pB);
     data.pins.append(pOut);
+  } else if (type == "math_dist") {
+    NodePinData pA, pB, pOut;
+    pA.pinId = m_graph.nextPinId++;
+    pA.name = "Sprite A";
+    pA.isInput = true;
+    pA.isExecution = false;
+    pA.value = "id";
+    pB.pinId = m_graph.nextPinId++;
+    pB.name = "Sprite B";
+    pB.isInput = true;
+    pB.isExecution = false;
+    pB.value = "get_id(type player)";
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Dist";
+    pOut.isInput = false;
+    pOut.isExecution = false;
+    data.pins.append(pA);
+    data.pins.append(pB);
+    data.pins.append(pOut);
+  } else if (type == "math_camera_dist") {
+    NodePinData pA, pOut;
+    pA.pinId = m_graph.nextPinId++;
+    pA.name = "Sprite";
+    pA.isInput = true;
+    pA.isExecution = false;
+    pA.value = "id";
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Dist";
+    pOut.isInput = false;
+    pOut.isExecution = false;
+    data.pins.append(pA);
+    data.pins.append(pOut);
+  } else if (type == "math_point_dist") {
+    NodePinData pX1, pY1, pZ1, pX2, pY2, pZ2, pOut;
+    pX1.pinId = m_graph.nextPinId++;
+    pX1.name = "X1";
+    pX1.isInput = true;
+    pX1.value = "0";
+    pY1.pinId = m_graph.nextPinId++;
+    pY1.name = "Y1";
+    pY1.isInput = true;
+    pY1.value = "0";
+    pZ1.pinId = m_graph.nextPinId++;
+    pZ1.name = "Z1";
+    pZ1.isInput = true;
+    pZ1.value = "0";
+    pX2.pinId = m_graph.nextPinId++;
+    pX2.name = "X2";
+    pX2.isInput = true;
+    pX2.value = "world_x";
+    pY2.pinId = m_graph.nextPinId++;
+    pY2.name = "Y2";
+    pY2.isInput = true;
+    pY2.value = "world_y";
+    pZ2.pinId = m_graph.nextPinId++;
+    pZ2.name = "Z2";
+    pZ2.isInput = true;
+    pZ2.value = "world_z";
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Dist";
+    pOut.isInput = false;
+    data.pins.append(pX1);
+    data.pins.append(pY1);
+    data.pins.append(pZ1);
+    data.pins.append(pX2);
+    data.pins.append(pY2);
+    data.pins.append(pZ2);
+    data.pins.append(pOut);
+  } else if (type == "math_angle") {
+    NodePinData pA, pB, pOut;
+    pA.pinId = m_graph.nextPinId++;
+    pA.name = "Origin";
+    pA.isInput = true;
+    pA.isExecution = false;
+    pA.value = "id";
+    pB.pinId = m_graph.nextPinId++;
+    pB.name = "Target";
+    pB.isInput = true;
+    pB.isExecution = false;
+    pB.value = "get_id(type player)";
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Angle";
+    pOut.isInput = false;
+    pOut.isExecution = false;
+    data.pins.append(pA);
+    data.pins.append(pB);
+    data.pins.append(pOut);
+  } else if (type == "math_camera_angle") {
+    NodePinData pA, pOut;
+    pA.pinId = m_graph.nextPinId++;
+    pA.name = "Sprite";
+    pA.isInput = true;
+    pA.isExecution = false;
+    pA.value = "id";
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Angle";
+    pOut.isInput = false;
+    pOut.isExecution = false;
+    data.pins.append(pA);
+    data.pins.append(pOut);
   } else if (type == "action_set_ui_text") {
     NodePinData pIn, pOut, pTarget, pText;
     pIn.pinId = m_graph.nextPinId++;
@@ -591,6 +733,41 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     data.pins.append(pOut);
     data.pins.append(pTarget);
     data.pins.append(pText);
+  } else if (type == "event_update") {
+    NodePinData pOut;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Each Frame";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    data.pins.append(pOut);
+    data.headerColor = QColor(200, 50, 50); // Red for events
+  } else if (type == "action_car_engine") {
+    NodePinData pIn, pOut, pFile, pMinVol, pMaxVol;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pFile.pinId = m_graph.nextPinId++;
+    pFile.name = "File";
+    pFile.isInput = true;
+    pFile.value = "assets/sfx/engine.wav";
+    pMinVol.pinId = m_graph.nextPinId++;
+    pMinVol.name = "Idle Volume";
+    pMinVol.isInput = true;
+    pMinVol.value = "40";
+    pMaxVol.pinId = m_graph.nextPinId++;
+    pMaxVol.name = "Max Volume";
+    pMaxVol.isInput = true;
+    pMaxVol.value = "128";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pFile);
+    data.pins.append(pMinVol);
+    data.pins.append(pMaxVol);
   }
 
   m_graph.nodes.append(data);
@@ -717,8 +894,14 @@ void BehaviorNodeScene::contextMenuEvent(
   events->addAction("Al Colisionar", [this, event]() {
     addNode("event_collision", event->scenePos());
   });
+  events->addAction("Al Actualizar", [this, event]() {
+    addNode("event_update", event->scenePos());
+  });
 
   QMenu *actions = menu.addMenu("Acciones");
+  actions->addAction("Sonido Motor Coche", [this, event]() {
+    addNode("action_car_engine", event->scenePos());
+  });
   actions->addAction("Decir (Say)", [this, event]() {
     addNode("action_say", event->scenePos());
   });
@@ -727,6 +910,9 @@ void BehaviorNodeScene::contextMenuEvent(
   });
   actions->addAction("Reproducir Sonido", [this, event]() {
     addNode("action_sound", event->scenePos());
+  });
+  actions->addAction("Temblor Cámara", [this, event]() {
+    addNode("action_shake_camera", event->scenePos());
   });
   actions->addAction("Lanzar Cámara (CamPath)", [this, event]() {
     addNode("action_campath", event->scenePos());
@@ -752,6 +938,21 @@ void BehaviorNodeScene::contextMenuEvent(
   });
   logic->addAction("Operación Matemática",
                    [this, event]() { addNode("math_op", event->scenePos()); });
+  logic->addAction("Distancia entre Sprites", [this, event]() {
+    addNode("math_dist", event->scenePos());
+  });
+  logic->addAction("Distancia a Cámara", [this, event]() {
+    addNode("math_camera_dist", event->scenePos());
+  });
+  logic->addAction("Distancia entre Puntos", [this, event]() {
+    addNode("math_point_dist", event->scenePos());
+  });
+  logic->addAction("Ángulo entre Sprites", [this, event]() {
+    addNode("math_angle", event->scenePos());
+  });
+  logic->addAction("Ángulo a Cámara", [this, event]() {
+    addNode("math_camera_angle", event->scenePos());
+  });
 
   menu.addSeparator();
 

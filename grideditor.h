@@ -39,7 +39,8 @@ public:
     MODE_PLACE_DECAL_CEILING, // Place ceiling decal
     MODE_MANUAL_PORTAL,       // Link portals manually
     MODE_SELECT_ENTITY,       // Select and move entities
-    MODE_PLACE_LIGHT          // Place lights
+    MODE_PLACE_LIGHT,         // Place lights
+    MODE_MULTI_SELECT         // Select multiple things in a box
   };
   void setEditMode(EditMode mode);
 
@@ -47,6 +48,11 @@ public:
   void setSelectedTexture(int textureId);
   void setSelectedSector(int sectorId);
   void setSelectedWall(int wallId);
+
+  // Multi-selection operations
+  void deleteSelection();
+  void copySelection();
+  void pasteSelection();
 
   // Zoom and pan
   void setZoom(float zoom);
@@ -117,6 +123,26 @@ private:
   int m_selectedWallSector; // Sector index of selected wall
   int m_selectedWallIndex;  // Wall index within sector
   int m_selectedEntity; // NEW: Index of selected entity in m_mapData->entities
+
+  // Multi-selection state
+  QList<int> m_multiSelectedSectors;
+  QList<int> m_multiSelectedEntities;
+  QList<int> m_multiSelectedLights;
+  bool m_isSelecting;
+  QPointF m_selectionStart;
+  QRectF m_selectionRect;
+
+  // Multi-selection movement
+  bool m_isMovingMultiSelection;
+  QPointF m_multiMoveStartPos;
+  QMap<int, QVector<QPointF>> m_initialMultiSelectedSectorVertices;
+  QMap<int, QPointF> m_initialMultiSelectedEntityPositions;
+  QMap<int, QPointF> m_initialMultiSelectedLightPositions;
+
+  // Copy/Paste buffer
+  QList<Sector> m_copyBufferSectors;
+  QList<EntityInstance> m_copyBufferEntities;
+  QList<Light> m_copyBufferLights;
 
   // ... view transform ...
 

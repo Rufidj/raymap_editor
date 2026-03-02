@@ -53,13 +53,14 @@ void CodeGenerator::setProjectData(const ProjectData &data) {
         "// Helper para rutas Android\n"
         "// Se usa ruta absoluta hardcodeada basada en el nombre del paquete\n"
         "function string get_asset_path(string relative_path)\n"
-        "begin\n"
-        "    if (os_id == OS_ANDROID)\n"
-        "        return \"/data/data/\" + \"{{PACKAGE_NAME}}\" + \"/files/\" + "
+        "BEGIN\n"
+        "    IF (os_id == OS_ANDROID)\n"
+        "        RETURN \"/data/data/\" + \"{{PACKAGE_NAME}}\" + \"/files/\" + "
         "relative_path;\n"
-        "    end\n"
-        "    return relative_path;\n"
-        "end";
+        "    ELSE\n"
+        "        RETURN relative_path;\n"
+        "    END\n"
+        "END\n";
 
     setVariable("ANDROID_HELPER_CODE", helperCode);
     setVariable("ASSET_WRAPPER_OPEN", "get_asset_path(");
@@ -101,15 +102,15 @@ QString CodeGenerator::generateEntityProcess(const QString &entityName,
   }
 
   // Generic entity
-  QString code = QString("process %1(x, y, z)\n"
+  QString code = QString("PROCESS %1(x, y, z)\n"
                          "PRIVATE\n"
                          "    int health = 100;\n"
-                         "begin\n"
-                         "    loop\n"
+                         "BEGIN\n"
+                         "    LOOP\n"
                          "        // TODO: Add entity logic\n"
-                         "        frame;\n"
-                         "    end\n"
-                         "end\n")
+                         "        FRAME;\n"
+                         "    END\n"
+                         "END\n")
                      .arg(entityName);
 
   return code;
@@ -176,6 +177,8 @@ QString CodeGenerator::getMainTemplate() {
       "    int screen_h;\n"
       "    int move_speed;\n"
       "    int rot_speed;\n"
+      "    float cam_shake_intensity = 0.0;\n"
+      "    int cam_shake_timer = 0;\n"
       "    // [[ED_GLOBAL_END]]\n"
       "\n"
       "    // [[USER_GLOBAL_START]]\n"
@@ -233,12 +236,12 @@ QString CodeGenerator::getPlayerTemplate() {
                  "PRIVATE\n"
                  "    int health = 100;\n"
                  "    float speed = 5.0;\n"
-                 "begin\n"
-                 "    loop\n"
+                 "BEGIN\n"
+                 "    LOOP\n"
                  "        // Player logic here\n"
-                 "        frame;\n"
-                 "    end\n"
-                 "end\n");
+                 "        FRAME;\n"
+                 "    END\n"
+                 "END\n");
 }
 
 QString CodeGenerator::getEnemyTemplate() {
@@ -246,12 +249,12 @@ QString CodeGenerator::getEnemyTemplate() {
                  "PRIVATE\n"
                  "    int health = 50;\n"
                  "    float speed = 3.0;\n"
-                 "begin\n"
-                 "    loop\n"
+                 "BEGIN\n"
+                 "    LOOP\n"
                  "        // Enemy AI here\n"
-                 "        frame;\n"
-                 "    end\n"
-                 "end\n");
+                 "        FRAME;\n"
+                 "    END\n"
+                 "END\n");
 }
 
 QString CodeGenerator::generateMainPrgWithEntities(
@@ -316,12 +319,12 @@ QString CodeGenerator::generateMainPrgWithEntities(
                "        RAY_CAMERA_UPDATE(0.017);";
   } else {
     movement = "// Movimiento manual de cámara\n"
-               "        if (key(_w)) RAY_MOVE_FORWARD(move_speed); end\n"
-               "        if (key(_s)) RAY_MOVE_BACKWARD(move_speed); end\n"
-               "        if (key(_a)) RAY_STRAFE_LEFT(move_speed); end\n"
-               "        if (key(_d)) RAY_STRAFE_RIGHT(move_speed); end\n"
-               "        if (key(_left)) RAY_ROTATE(-rot_speed); end\n"
-               "        if (key(_right)) RAY_ROTATE(rot_speed); end\n"
+               "        IF (key(_w)) RAY_MOVE_FORWARD(move_speed); END\n"
+               "        IF (key(_s)) RAY_MOVE_BACKWARD(move_speed); END\n"
+               "        IF (key(_a)) RAY_STRAFE_LEFT(move_speed); END\n"
+               "        IF (key(_d)) RAY_STRAFE_RIGHT(move_speed); END\n"
+               "        IF (key(_left)) RAY_ROTATE(-rot_speed); END\n"
+               "        IF (key(_right)) RAY_ROTATE(rot_speed); END\n"
                "        RAY_CAMERA_UPDATE(0.017);";
   }
   setVariable("MOVEMENT_LOGIC", movement);
@@ -338,19 +341,21 @@ QString CodeGenerator::generateEntityModel(const QString &processName,
   QString loadStr =
       QString("%1\"%2\"%3").arg(wrapperOpen).arg(modelPath).arg(wrapperClose);
 
-  return QString("process %1(x, y, z, angle);\n"
+  return QString("PROCESS %1(x, y, z, angle);\n"
                  "PRIVATE\n"
                  "    int file_id = 0;\n"
-                 "end\n"
-                 "begin\n"
-                 "    file_id = load_md3(%2);\n"
-                 "    if (file_id > 0)\n"
-                 "        graph = file_id;\n"
-                 "    end\n"
-                 "    loop\n"
-                 "        frame;\n"
-                 "    end\n"
-                 "end\n")
+                 "    int spr_id = 0;\n" // Added spr_id
+                 "END\n"
+                 "BEGIN\n"
+                 "    file_id = load_md3(%2);\n" // Kept load_md3
+                 "    IF (file_id > 0)\n"
+                 "        spr_id = RAY_ADD_SPRITE(x, y, z, file_id, 0, 0, 0, "
+                 "0);\n" // Changed to RAY_ADD_SPRITE with x,y,z
+                 "    END\n"
+                 "    LOOP\n"
+                 "        FRAME;\n"
+                 "    END\n"
+                 "END\n")
       .arg(processName)
       .arg(loadStr);
 }
@@ -376,12 +381,12 @@ QString CodeGenerator::getCameraControllerTemplate() {
       "    double time;\n"
       "    double duration;\n"
       "    int easeIn, easeOut;\n"
-      "end\n"
+      "END\n" // Changed 'end' to 'END'
       "\n"
       "TYPE CameraPathData\n"
       "    int num_keyframes;\n"
       "    CameraKeyframe pointer keyframes;\n"
-      "end\n"
+      "END\n" // Changed 'end' to 'END'
       "\n"
       "/* Load binary camera path (.cam) */\n"
       "function int LoadCameraPath(string filename, CameraPathData pointer "
@@ -390,17 +395,17 @@ QString CodeGenerator::getCameraControllerTemplate() {
       "    int f;\n"
       "    int count;\n"
       "    int i;\n"
-      "begin\n"
+      "BEGIN\n" // Changed 'begin' to 'BEGIN'
       "    f = fopen(filename, O_READ);\n"
-      "    if (f == 0) return -1; end\n"
+      "    IF (f == 0) RETURN -1; END\n"
       "\n"
       "    fread(f, count);\n"
       "    out_data.num_keyframes = count;\n"
-      "    if (count > 0)\n"
+      "    IF (count > 0)\n"
       "        out_data.keyframes = alloc(count * sizeof(CameraKeyframe));\n"
-      "    end\n"
+      "    END\n"
       "\n"
-      "    for (i=0; i<count; i++)\n"
+      "    FOR (i=0; i<count; i++)\n"
       "        fread(f, out_data.keyframes[i].x);\n"
       "        fread(f, out_data.keyframes[i].y);\n"
       "        fread(f, out_data.keyframes[i].z);\n"
@@ -412,38 +417,46 @@ QString CodeGenerator::getCameraControllerTemplate() {
       "        fread(f, out_data.keyframes[i].duration);\n"
       "        fread(f, out_data.keyframes[i].easeIn);\n"
       "        fread(f, out_data.keyframes[i].easeOut);\n"
-      "    end\n"
+      "    END\n"
       "\n"
       "    fclose(f);\n"
-      "    return 0;\n"
-      "end\n"
+      "    RETURN 0;\n"
+      // Changed 'return' to 'RETURN'
+      "END\n" // Changed 'end' to 'END'
       "\n"
       "function FreeCameraPath(CameraPathData pointer data)\n"
-      "begin\n"
-      "    if (data.keyframes != NULL) free(data.keyframes); end\n"
+      "BEGIN\n" // Changed 'begin' to 'BEGIN'
+      "    IF (data.keyframes != NULL) free(data.keyframes); END\n" // Changed
+                                                                    // 'if' to
+                                                                    // 'IF',
+                                                                    // 'end' to
+                                                                    // 'END'
       "    data.num_keyframes = 0;\n"
-      "end\n"
+      "END\n" // Changed 'end' to 'END'
       "\n"
       "/* Trigger PROCESS */\n"
       "process CameraTrigger(x, y, z, string file);\n"
       "PRIVATE\n"
       "    int player_id;\n"
       "    int dist;\n"
-      "begin\n"
-      "    loop\n"
+      "BEGIN\n"     // Changed 'begin' to 'BEGIN'
+      "    LOOP\n"  // Changed 'loop' to 'LOOP'
+      "    BEGIN\n" // Added BEGIN
       "        player_id = get_id(type player);\n"
-      "        if (player_id)\n"
+      "        IF (player_id)\n" // Changed 'if' to 'IF'
+      "        BEGIN\n"          // Added BEGIN
       "            dist = abs(player_id.x - x) + abs(player_id.y - y);\n"
-      "            if (dist < 64)\n"
+      "            IF (dist < 64)\n" // Changed 'if' to 'IF'
+      "            BEGIN\n"          // Added BEGIN
       "                // Start Cutscene\n"
       "                PlayCameraPath(file);\n"
       "                // Only run once?\n"
-      "                break;\n"
-      "            end\n"
-      "        end\n"
-      "        frame;\n"
-      "    end\n"
-      "end\n"
+      "                BREAK;\n" // Changed 'break' to 'BREAK'
+      "            END\n"        // Added END
+      "        END\n"            // Added END
+      "        FRAME;\n"
+      "    END\n" // Changed 'end' to 'END'
+      "END\n"     // Changed 'end' to 'END'
       "\n"
       "// Placeholder for PlayCameraPath implementation\n"
       "process PlayCameraPath(string filename);\n"
@@ -587,11 +600,11 @@ QString CodeGenerator::generateUserLogicStubs(const QStringList &processNames) {
     QString lowerName = name.toLower();
     code += QString("// Hooks for %1\n").arg(lowerName);
     code +=
-        QString("function hook_%1_init(int p_id)\nbegin\n    // Called when "
-                "entity is spawned\nend\n\n")
+        QString("FUNCTION hook_%1_init(int p_id)\nBEGIN\n    // Called when "
+                "entity is spawned\nEND\n\n")
             .arg(lowerName);
-    code += QString("function hook_%1_update(int p_id)\nbegin\n    // Called "
-                    "every frame\nend\n\n")
+    code += QString("FUNCTION hook_%1_update(int p_id)\nBEGIN\n    // Called "
+                    "every frame\nEND\n\n")
                 .arg(lowerName);
   }
 
@@ -603,8 +616,16 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
                                         const QString &interactionMapPath,
                                         const QString &existingCode) {
   QString code;
-  code += QString("process scene_%1()\n").arg(sceneName);
-  code += "private\n    int ent_id;\n    string w_title;\n";
+  code += QString("PROCESS SCENE_%1()\n").arg(sceneName);
+  code += "PRIVATE\n    int ent_id;\n    string w_title;\n";
+  code += "    int mouse_last_state;\n";
+  code += "    int scene_exit;\n";
+  code += "    int fpg_map;\n";
+  code += "    int spawn_ent_id;\n";
+  code += "    int player_id;\n";
+  if (data.timeout > 0 && !data.nextScene.isEmpty()) {
+    code += "    int scene_timer;\n";
+  }
 
   QString userSetup, userLoop;
 
@@ -633,11 +654,16 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
     }
   }
 
-  code += "begin\n";
+  code += "BEGIN\n";
+  code += "    mouse_last_state = 0;\n";
+  code += "    scene_exit = 0;\n";
+  if (data.timeout > 0 && !data.nextScene.isEmpty()) {
+    code += "    scene_timer = 0;\n";
+  }
   code += "    // Cleanup: Ensure we are the only process running\n";
   code += "    let_me_alone();\n";
   code += "    // Wait a frame to ensure cleanup propagates\n";
-  code += "    frame;\n\n";
+  code += "    FRAME;\n\n";
 
   code += "    // Load global resources (only loads if not already loaded)\n";
   code += "    load_project_resources();\n\n";
@@ -796,7 +822,7 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
 
       QString btnCode;
       // Process updates to accept font_id
-      btnCode += QString("process %1(int font_id)\n").arg(btnProcName);
+      btnCode += QString("PROCESS %1(int font_id)\n").arg(btnProcName);
       btnCode += "PRIVATE\n";
       btnCode += "    int txt_id;\n";
       btnCode += "    int w, h;\n";
@@ -853,11 +879,11 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
                   .arg(data.height);
       QString mapPath = ent->sourceFile;
       if (mapPath.contains("assets/"))
-        mapPath = mapPath.mid(mapPath.indexOf("assets/"));
+        mapPath = mapPath.mid(mapPath.lastIndexOf("assets/"));
 
       // Auto-load FPG textures (Assumed to be in assets/fpg/ with same name)
       QString fpgPath = "assets/fpg/" + QFileInfo(mapPath).baseName() + ".fpg";
-      code += QString("    int fpg_map = fpg_load(\"%1\");\n").arg(fpgPath);
+      code += QString("    fpg_map = fpg_load(\"%1\");\n").arg(fpgPath);
       code +=
           "    if (fpg_map == 0) say(\"Warning: FPG texture file not found: " +
           fpgPath + "\"); end\n";
@@ -872,8 +898,18 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
       // We need the full path to read the file NOW (during code generation)
       // Resolve absolute path for loading
       QString fullPath = ent->sourceFile;
-      QFileInfo fi(fullPath);
-      if (!fi.isAbsolute() && !m_projectData.path.isEmpty()) {
+      if (fullPath.contains("assets/")) {
+        // Clean up doubled assets if necessary
+        QString cleanPart = fullPath.mid(fullPath.lastIndexOf("assets/"));
+        QString testPath = m_projectData.path + "/" + cleanPart;
+        if (QFile::exists(testPath)) {
+          fullPath = testPath;
+        } else if (!QFileInfo(fullPath).isAbsolute() &&
+                   !m_projectData.path.isEmpty()) {
+          fullPath = m_projectData.path + "/" + fullPath;
+        }
+      } else if (!QFileInfo(fullPath).isAbsolute() &&
+                 !m_projectData.path.isEmpty()) {
         fullPath = m_projectData.path + "/" + fullPath;
       }
 
@@ -883,9 +919,8 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
 
         if (!internalData.entities.isEmpty()) {
           code += "    // Spawning Map Entities (Auto-generated)\n";
-          // Declare generic ID variable for spawns
-          code += "    int spawn_ent_id;\n";
-          code += "    int player_id = 0;\n";
+          // Variables spawn_ent_id and player_id are now in PRIVATE section
+          code += "    player_id = 0;\n";
 
           for (const auto &mapEnt : internalData.entities) {
             QString procName = mapEnt.processName;
@@ -902,18 +937,22 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
             procName =
                 procName.replace(" ", "_").replace("-", "_").replace(".", "_");
 
+            // Append spawn_id for unique per-instance process name
+            QString uniqueProcName =
+                procName + "_" + QString::number(mapEnt.spawn_id);
+
             // Generate Process Call
             // Assumptions: Process(x, y, z, angle)
             // Note: mapEnt.cameraRotation is float. Passing as argument.
             code += QString("    spawn_ent_id = %1(%2, %3, %4, %5);\n")
-                        .arg(procName)
+                        .arg(uniqueProcName)
                         .arg(mapEnt.x)
                         .arg(mapEnt.y)
                         .arg(mapEnt.z)
                         .arg(mapEnt.cameraRotation);
 
             // --- Handle Behaviors ---
-            code += "    if (spawn_ent_id > 0)\n";
+            code += "    IF (spawn_ent_id > 0)\n";
 
             // Player Flag
             if (mapEnt.isPlayer) {
@@ -941,7 +980,7 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
                           .arg(mapEnt.controlType);
             }
 
-            code += "    end\n";
+            code += "    END\n";
           }
           code += "\n";
         }
@@ -959,20 +998,40 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
 
       // Inject the process definition
       QString rendererCode;
-      rendererCode += "process Ray_Renderer_Process(int w, int h)\n";
-      rendererCode += "begin\n";
+      rendererCode += "PROCESS Ray_Renderer_Process(int w, int h)\n";
+      rendererCode += "PRIVATE\n";
+      rendererCode += "    float old_cx, old_cy, off_x, off_y;\n";
+      rendererCode += "BEGIN\n";
       rendererCode += "    // Create rendering surface\n";
       rendererCode += "    graph = map_new(w, h, 32);\n";
       rendererCode += "    x = w / 2;\n";
       rendererCode += "    y = h / 2;\n";
       rendererCode += "    z = 1000; // Force 3D background depth\n";
-      rendererCode += "    loop\n";
-      rendererCode += "        RAY_RENDER(graph);\n";
-      rendererCode += "        frame;\n";
-      rendererCode += "    end\n";
+      rendererCode += "    LOOP\n";
+      rendererCode += "        RAY_PHYSICS_STEP(16.0);\n";
+      rendererCode += "        IF (cam_shake_timer > 0)\n";
+      rendererCode += "            old_cx = RAY_GET_CAMERA_X();\n";
+      rendererCode += "            old_cy = RAY_GET_CAMERA_Y();\n";
+      rendererCode += "            off_x = (rand(-100, 100) / 100.0) * "
+                      "cam_shake_intensity;\n";
+      rendererCode += "            off_y = (rand(-100, 100) / 100.0) * "
+                      "cam_shake_intensity;\n";
+      rendererCode += "            RAY_SET_CAMERA(old_cx + off_x, old_cy + "
+                      "off_y, RAY_GET_CAMERA_Z(), RAY_GET_CAMERA_ROT(), "
+                      "RAY_GET_CAMERA_PITCH());\n";
+      rendererCode += "            RAY_RENDER(graph);\n";
+      rendererCode +=
+          "            RAY_SET_CAMERA(old_cx, old_cy, RAY_GET_CAMERA_Z(), "
+          "RAY_GET_CAMERA_ROT(), RAY_GET_CAMERA_PITCH());\n";
+      rendererCode += "            cam_shake_timer--;\n";
+      rendererCode += "        ELSE\n";
+      rendererCode += "            RAY_RENDER(graph);\n";
+      rendererCode += "        END\n";
+      rendererCode += "        FRAME;\n";
+      rendererCode += "    END\n";
       rendererCode += "OnExit:\n";
-      rendererCode += "    if (graph > 0) map_unload(0, graph); end\n";
-      rendererCode += "end\n\n";
+      rendererCode += "    IF (graph > 0) map_unload(0, graph); END\n";
+      rendererCode += "END\n\n";
 
       m_inlineScenes += rendererCode;
     }
@@ -982,19 +1041,14 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   code += "\n    // [[USER_SETUP]]" + userSetup + "// [[USER_SETUP_END]]\n";
 
   // Loop Logic
-  code += "    int mouse_last_state = 0;\n";
-  code += "    int scene_exit = 0;\n";
-  if (data.timeout > 0 && !data.nextScene.isEmpty()) {
-    code += "    int scene_timer = 0;\n";
-  }
-  code += "    loop\n";
-  code += "        if (scene_exit) break; end\n";
+  code += "    LOOP\n";
+  code += "        IF (scene_exit) BREAK; END\n";
   if (data.exitOnEsc) {
-    code += "        if (key(_esc)) exit(\"\", 0); end\n";
+    code += "        IF (key(_esc)) exit(\"\", 0); END\n";
   }
   if (data.timeout > 0 && !data.nextScene.isEmpty()) {
-    code += QString("        scene_timer++;\n");
-    code += QString("        if (scene_timer > %1) goto_scene(\"%2\"); end\n")
+    code += "        scene_timer++;\n";
+    code += QString("        IF (scene_timer > %1) goto_scene(\"%2\"); END\n")
                 .arg(data.timeout * 60)
                 .arg(data.nextScene);
   }
@@ -1002,7 +1056,7 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   // 100% Robust Click Detection (No interaction map needed)
   if (!sceneEvents.isEmpty()) {
     code += "\n        // Robust Click Handling\n";
-    code += "        if (mouse.left && !mouse_last_state)\n";
+    code += "        IF (mouse.left && !mouse_last_state)\n";
     code += "            mouse_last_state = 1;\n";
     code += "            // Check each interactive entity\n";
 
@@ -1010,13 +1064,13 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
     for (int i = sceneEvents.size() - 1; i >= 0; i--) {
       const auto &ev = sceneEvents[i];
       if (ev.isSprite) {
-        code +=
-            QString("            if (check_scene_click(%1, %2, %3, %4, %5))\n")
-                .arg(ev.varName)
-                .arg(ev.hw)
-                .arg(ev.hh)
-                .arg(ev.hx)
-                .arg(ev.hy);
+        code += QString("            IF (check_scene_click(%1, %2, %3, %4, "
+                        "%5))\n")
+                    .arg(ev.varName)
+                    .arg(ev.hw)
+                    .arg(ev.hh)
+                    .arg(ev.hx)
+                    .arg(ev.hy);
       } else {
         // SIMPLIFIED HITBOX LOGIC (CENTER-BASED)
         int w = ev.hw > 0 ? ev.hw : 120;
@@ -1033,7 +1087,7 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
         // DEBUG VISUALS: REMOVED
         // box(xmin, ymin, xmax, ymax, map_new(1,1,16), 64);
 
-        code += QString("            if (mouse.x >= %1 && mouse.x <= %2 && "
+        code += QString("            IF (mouse.x >= %1 && mouse.x <= %2 && "
                         "mouse.y >= %3 && mouse.y <= %4)\n")
                     .arg(xmin)
                     .arg(xmax)
@@ -1046,19 +1100,19 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
                   .arg(sanitizedCode.left(30));
       code += QString("                %1\n").arg(ev.code);
       code += "                scene_exit = 1;\n";
-      code += "                break; // Stop after first click\n";
-      code += "            end\n"; // Close the hit-test IF
+      code += "                BREAK; // Stop after first click\n";
+      code += "            END\n"; // Close the hit-test IF
     }
-    code += "        end\n"; // Close the mouse.left IF
-    code += "        if (!mouse.left) mouse_last_state = 0; end\n";
+    code += "        END\n"; // Close the mouse.left IF
+    code += "        IF (!mouse.left) mouse_last_state = 0; END\n";
   }
 
   // Inject User Loop
   code += "        // [[USER_LOOP]]" + userLoop + "// [[USER_LOOP_END]]\n";
 
-  code += "        frame;\n";
-  code += "    end\n";
-  code += "end\n";
+  code += "        FRAME;\n";
+  code += "    END\n";
+  code += "END\n";
 
   return code;
 }
@@ -1089,51 +1143,51 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
                           : m_projectData.packageName;
 
     m_inlineCommons += "// Android Path Helper\n";
-    m_inlineCommons += "function string get_asset_path(string relative_path)\n";
-    m_inlineCommons += "begin\n";
-    m_inlineCommons += "    if (os_id == OS_ANDROID)\n";
-    m_inlineCommons += "        return \"/data/data/\" + \"" + pkgName +
+    m_inlineCommons += "FUNCTION string get_asset_path(string relative_path)\n";
+    m_inlineCommons += "BEGIN\n";
+    m_inlineCommons += "    IF (os_id == OS_ANDROID)\n";
+    m_inlineCommons += "        RETURN \"/data/data/\" + \"" + pkgName +
                        "\" + \"/files/\" + relative_path;\n";
-    m_inlineCommons += "    else\n";
+    m_inlineCommons += "    ELSE\n";
     m_inlineCommons += "        // Robust Desktop Path Check (src/ vs root)\n";
-    m_inlineCommons += "        if (!fexists(relative_path) && fexists(\"../\" "
+    m_inlineCommons += "        IF (!fexists(relative_path) && fexists(\"../\" "
                        "+ relative_path))\n";
-    m_inlineCommons += "            return \"../\" + relative_path;\n";
-    m_inlineCommons += "        end\n";
-    m_inlineCommons += "    end\n";
-    m_inlineCommons += "    return relative_path;\n";
-    m_inlineCommons += "end\n\n";
+    m_inlineCommons += "            RETURN \"../\" + relative_path;\n";
+    m_inlineCommons += "        END\n";
+    m_inlineCommons += "    END\n";
+    m_inlineCommons += "    RETURN relative_path;\n";
+    m_inlineCommons += "END\n\n";
 
     m_inlineCommons +=
-        "process StaticSprite()\nbegin\n    loop\n        frame;\n    "
-        "end\nend\n\n";
+        "PROCESS StaticSprite()\nBEGIN\n    LOOP\n        FRAME;\n    "
+        "END\nEND\n\n";
 
     m_inlineCommons += "// Shared 3D Renderer Process\n";
-    m_inlineCommons += "process ray_display()\nbegin\n    loop\n";
+    m_inlineCommons += "PROCESS ray_display()\nBEGIN\n    LOOP\n";
     m_inlineCommons += "        graph = RAY_RENDER(0);\n";
-    m_inlineCommons += "        if (graph)\n";
+    m_inlineCommons += "        IF (graph)\n";
     m_inlineCommons += "            x = 320; y = 240; // Default center\n";
-    m_inlineCommons += "        end\n";
-    m_inlineCommons += "        frame;\n";
-    m_inlineCommons += "    end\n";
-    m_inlineCommons += "end\n\n";
+    m_inlineCommons += "        END\n";
+    m_inlineCommons += "        FRAME;\n";
+    m_inlineCommons += "    END\n";
+    m_inlineCommons += "END\n\n";
     m_inlineCommons += "// Shared 2D Click Detection Helper\n";
-    m_inlineCommons += "function int check_scene_click(int id, int hw, int hh, "
+    m_inlineCommons += "FUNCTION int check_scene_click(int id, int hw, int hh, "
                        "int hx, int hy)\n";
-    m_inlineCommons += "private\n    int w, h, xmin, ymin, xmax, ymax;\n";
-    m_inlineCommons += "begin\n";
-    m_inlineCommons += "    if (id == 0 || !exists(id)) return 0; end\n\n";
-    m_inlineCommons += "    if (hw > 0 && hh > 0)\n";
+    m_inlineCommons += "PRIVATE\n    int w, h, xmin, ymin, xmax, ymax;\n";
+    m_inlineCommons += "BEGIN\n";
+    m_inlineCommons += "    IF (id == 0 || !exists(id)) RETURN 0; END\n\n";
+    m_inlineCommons += "    IF (hw > 0 && hh > 0)\n";
     m_inlineCommons += "        w = hw; h = hh;\n";
-    m_inlineCommons += "    else\n";
+    m_inlineCommons += "    ELSE\n";
     m_inlineCommons += "        // Auto size from graphic (if exists)\n";
     m_inlineCommons +=
         "        w = graphic_info(id.file, id.graph, G_WIDTH);\n";
     m_inlineCommons +=
         "        h = graphic_info(id.file, id.graph, G_HEIGHT);\n";
-    m_inlineCommons += "        if (w <= 0) w = 64; end \n";
-    m_inlineCommons += "        if (h <= 0) h = 32; end\n";
-    m_inlineCommons += "    end\n\n";
+    m_inlineCommons += "        IF (w <= 0) w = 64; END \n";
+    m_inlineCommons += "        IF (h <= 0) h = 32; END\n";
+    m_inlineCommons += "    END\n\n";
     m_inlineCommons += "    // Scale Adjustment\n";
     m_inlineCommons += "    w = w * id.size_x / 100;\n";
     m_inlineCommons += "    // Simplified Check:\n";
@@ -1141,9 +1195,9 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
                        "native collision!\n";
     m_inlineCommons +=
         "    // This handles rotation, scale and transparency automatically.\n";
-    m_inlineCommons += "    if (id > 0 && exists(id))\n";
-    m_inlineCommons += "        return collision(type mouse);\n";
-    m_inlineCommons += "    end\n\n";
+    m_inlineCommons += "    IF (id > 0 && EXISTS(id))\n";
+    m_inlineCommons += "        RETURN collision(type mouse);\n";
+    m_inlineCommons += "    END\n\n";
     m_inlineCommons +=
         "    // Fallback for manual areas (Text or No-Graphic)\n";
     m_inlineCommons += "    // Scale Adjustment for manual sizes\n";
@@ -1187,12 +1241,31 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
         "    // DEBUG: Expand the box slightly to be forgiving?\n";
     m_inlineCommons += "    // No, let's stick to exact math first.\n";
     m_inlineCommons += "    \n";
-    m_inlineCommons += "    if (mouse.x >= xmin && mouse.x <= xmax && mouse.y "
+    m_inlineCommons += "    IF (mouse.x >= xmin && mouse.x <= xmax && mouse.y "
                        ">= ymin && mouse.y <= ymax)\n";
-    m_inlineCommons += "        return 1;\n";
-    m_inlineCommons += "    end\n";
-    m_inlineCommons += "    return 0;\n";
-    m_inlineCommons += "end\n\n";
+    m_inlineCommons += "        RETURN 1;\n";
+    m_inlineCommons += "    END\n";
+    m_inlineCommons += "    RETURN 0;\n";
+    m_inlineCommons += "END\n\n";
+    m_inlineCommons += "PROCESS Billboard_Effect_Process(float px, float py, "
+                       "float pz, int file, "
+                       "int g_start, int g_end, float speed, float scale)\n";
+    m_inlineCommons +=
+        "PRIVATE\n    int spr_id;\n    int cur_g;\n    float timer;\n";
+    m_inlineCommons += "BEGIN\n    timer = 0;\n";
+    m_inlineCommons += "    cur_g = g_start;\n";
+    m_inlineCommons +=
+        "    spr_id = RAY_ADD_SPRITE(px, py, pz, file, cur_g, 0, 0, 0);\n";
+    m_inlineCommons += "    RAY_SET_SPRITE_SCALE(spr_id, scale);\n";
+    m_inlineCommons += "    WHILE (cur_g <= g_end)\n";
+    m_inlineCommons += "        RAY_SET_SPRITE_GRAPH(spr_id, cur_g);\n";
+    m_inlineCommons += "        timer = 0;\n";
+    m_inlineCommons +=
+        "        WHILE (timer < speed) timer += 0.016; FRAME; END\n";
+    m_inlineCommons += "        cur_g++;\n";
+    m_inlineCommons += "    END\n";
+    m_inlineCommons += "    RAY_REMOVE_SPRITE(spr_id);\n";
+    m_inlineCommons += "END\n\n";
   }
 
   // ---------------------------------------------------------
@@ -1350,10 +1423,10 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
       resMap[res] = varName;
       m_inlineResources += "    int " + varName + ";\n";
     }
-    m_inlineResources += "end\n\n";
+    m_inlineResources += "END\n\n";
 
     // Load Function
-    m_inlineResources += "function load_project_resources()\nbegin\n";
+    m_inlineResources += "FUNCTION load_project_resources()\nBEGIN\n";
     for (auto it = resMap.begin(); it != resMap.end(); ++it) {
       QString res = it.key();
       QString varName = it.value();
@@ -1369,54 +1442,54 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
         loadFunc = "music_load";
 
       if (!loadFunc.isEmpty()) {
-        m_inlineResources += "    if (" + varName + " <= 0) " + varName +
+        m_inlineResources += "    IF (" + varName + " <= 0) " + varName +
                              " = " + loadFunc + "(" + assetOpen + "\"" + res +
-                             "\"" + assetClose + "); end\n";
-        m_inlineResources += "    if (" + varName +
+                             "\"" + assetClose + "); END\n";
+        m_inlineResources += "    IF (" + varName +
                              " > 0) say(\"Loaded resource: " + res +
-                             " ID: \" + " + varName + "); end\n";
+                             " ID: \" + " + varName + "); END\n";
       }
     }
-    m_inlineResources += "end\n\n";
+    m_inlineResources += "END\n\n";
 
     // Unload Function
-    m_inlineResources += "function unload_project_resources()\nbegin\n";
+    m_inlineResources += "FUNCTION unload_project_resources()\nBEGIN\n";
     for (auto it = resMap.begin(); it != resMap.end(); ++it) {
       QString res = it.key();
       QString varName = it.value();
       QString ext = QFileInfo(res).suffix().toLower();
       if (ext == "fpg")
         m_inlineResources +=
-            "    if(" + varName + ">0) fpg_unload(" + varName + "); end\n";
+            "    IF(" + varName + ">0) fpg_unload(" + varName + "); END\n";
       else if (ext == "fnt" || ext == "fnx")
         m_inlineResources +=
-            "    if(" + varName + ">0) fnt_unload(" + varName + "); end\n";
+            "    IF(" + varName + ">0) fnt_unload(" + varName + "); END\n";
       else if (ext == "mp3" || ext == "ogg" || ext == "wav")
         m_inlineResources +=
-            "    if(" + varName + ">0) music_unload(" + varName + "); end\n";
+            "    IF(" + varName + ">0) music_unload(" + varName + "); END\n";
       else if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" ||
                ext == "tga") {
         m_inlineResources +=
-            "    if(" + varName + ">0) map_unload(0, " + varName + "); end\n";
+            "    IF(" + varName + ">0) map_unload(0, " + varName + "); END\n";
       }
       m_inlineResources += "    " + varName + " = 0;\n";
     }
-    m_inlineResources += "end\n\n";
+    m_inlineResources += "END\n\n";
   }
 
   // Scene Navigation Helper (Inlined into scenes block or resources block?
   // Scenes block seems mostly appropriate)
   {
     m_inlineScenes += "\n// Scene Navigation Helper\n";
-    m_inlineScenes += "function goto_scene(string name)\nbegin\n";
+    m_inlineScenes += "FUNCTION goto_scene(string name)\nBEGIN\n";
     m_inlineScenes += "    // Stop music and clean up previous scene\n";
     m_inlineScenes += "    music_stop();\n";
     m_inlineScenes += "    let_me_alone();\n";
     m_inlineScenes += "    write_delete(all_text);\n\n";
     for (const QString &sn : sceneNames)
-      m_inlineScenes += "    if (name == \"" + sn + "\") scene_" +
-                        sn.toLower() + "(); return; end\n";
-    m_inlineScenes += "    say(\"Scene not found: \" + name);\nend\n";
+      m_inlineScenes += "    IF (name == \"" + sn + "\") scene_" +
+                        sn.toLower() + "(); RETURN; END\n";
+    m_inlineScenes += "    say(\"Scene not found: \" + name);\nEND\n";
   }
 }
 

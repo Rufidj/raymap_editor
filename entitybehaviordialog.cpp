@@ -1,10 +1,27 @@
 #include "entitybehaviordialog.h"
 #include "behaviornodeeditor.h"
+#include "md3loader.h"
+#include "processgenerator.h"
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QFileInfo>
+#include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
+#include <QPoint>
+#include <QPushButton>
+#include <QRegularExpression> // Replaces QRegExp
+#include <QScrollArea>
+#include <QSpinBox>
+#include <QTextEdit>
+#include <QTextStream>
 #include <QVBoxLayout>
+#include <QVariant>
 
 EntityBehaviorDialog::EntityBehaviorDialog(
     const EntityInstance &entity, const QString &projectPath,
@@ -22,7 +39,13 @@ EntityBehaviorDialog::EntityBehaviorDialog(
 }
 
 void EntityBehaviorDialog::setupUI() {
-  QVBoxLayout *mainLayout = new QVBoxLayout(this);
+  QVBoxLayout *outerLayout = new QVBoxLayout(this);
+  QScrollArea *scrollArea = new QScrollArea();
+  scrollArea->setWidgetResizable(true);
+  QWidget *scrollContent = new QWidget();
+  QVBoxLayout *mainLayout = new QVBoxLayout(scrollContent);
+  scrollArea->setWidget(scrollContent);
+  outerLayout->addWidget(scrollArea);
 
   // Entity Info
   QGroupBox *infoGroup = new QGroupBox(tr("Información de Entidad"));
@@ -214,6 +237,163 @@ void EntityBehaviorDialog::setupUI() {
     m_physicsGroup->setVisible(false);
   }
 
+  // ===== PHYSICS ENGINE SECTION =====
+  m_physicsEngineGroup = new QGroupBox(tr("Motor de Físicas"));
+  m_physicsEngineGroup->setCheckable(true);
+  m_physicsEngineGroup->setChecked(m_entity.physicsEnabled);
+  QFormLayout *peLayout = new QFormLayout();
+
+  m_massSpin = new QDoubleSpinBox();
+  m_massSpin->setRange(0.0, 100000.0);
+  m_massSpin->setDecimals(2);
+  m_massSpin->setValue(m_entity.physicsMass);
+  m_massSpin->setSuffix(" kg");
+  m_massSpin->setToolTip(tr("Masa del objeto (0 = masa infinita/estático)"));
+  peLayout->addRow(tr("Masa:"), m_massSpin);
+
+  m_frictionSpin = new QDoubleSpinBox();
+  m_frictionSpin->setRange(0.0, 1.0);
+  m_frictionSpin->setDecimals(2);
+  m_frictionSpin->setSingleStep(0.05);
+  m_frictionSpin->setValue(m_entity.physicsFriction);
+  m_frictionSpin->setToolTip(tr("Coeficiente de fricción (0=hielo, 1=goma)"));
+  peLayout->addRow(tr("Fricción:"), m_frictionSpin);
+
+  m_restitutionSpin = new QDoubleSpinBox();
+  m_restitutionSpin->setRange(0.0, 1.0);
+  m_restitutionSpin->setDecimals(2);
+  m_restitutionSpin->setSingleStep(0.05);
+  m_restitutionSpin->setValue(m_entity.physicsRestitution);
+  m_restitutionSpin->setToolTip(tr("Rebote (0=ninguno, 1=rebote perfecto)"));
+  peLayout->addRow(tr("Rebote:"), m_restitutionSpin);
+
+  m_gravityScaleSpin = new QDoubleSpinBox();
+  m_gravityScaleSpin->setRange(-10.0, 10.0);
+  m_gravityScaleSpin->setDecimals(2);
+  m_gravityScaleSpin->setSingleStep(0.1);
+  m_gravityScaleSpin->setValue(m_entity.physicsGravityScale);
+  m_gravityScaleSpin->setToolTip(
+      tr("Multiplicador de gravedad (0=flotante, 1=normal, -1=invertida)"));
+  peLayout->addRow(tr("Escala Gravedad:"), m_gravityScaleSpin);
+
+  m_linearDampingSpin = new QDoubleSpinBox();
+  m_linearDampingSpin->setRange(0.0, 1.0);
+  m_linearDampingSpin->setDecimals(3);
+  m_linearDampingSpin->setSingleStep(0.01);
+  m_linearDampingSpin->setValue(m_entity.physicsLinearDamping);
+  m_linearDampingSpin->setToolTip(tr("Resistencia del aire al movimiento"));
+  peLayout->addRow(tr("Damping Lineal:"), m_linearDampingSpin);
+
+  m_angularDampingSpin = new QDoubleSpinBox();
+  m_angularDampingSpin->setRange(0.0, 1.0);
+  m_angularDampingSpin->setDecimals(3);
+  m_angularDampingSpin->setSingleStep(0.01);
+  m_angularDampingSpin->setValue(m_entity.physicsAngularDamping);
+  m_angularDampingSpin->setToolTip(tr("Resistencia del aire a la rotación"));
+  peLayout->addRow(tr("Damping Angular:"), m_angularDampingSpin);
+
+  // Mode flags
+  m_staticCheck = new QCheckBox(tr("Estático (inmovible, como paredes)"));
+  m_staticCheck->setChecked(m_entity.physicsIsStatic);
+  peLayout->addRow(m_staticCheck);
+
+  m_kinematicCheck =
+      new QCheckBox(tr("Cinemático (movido por código, no por físicas)"));
+  m_kinematicCheck->setChecked(m_entity.physicsIsKinematic);
+  peLayout->addRow(m_kinematicCheck);
+
+  m_triggerCheck =
+      new QCheckBox(tr("Trigger (detecta colisión sin respuesta física)"));
+  m_triggerCheck->setChecked(m_entity.physicsIsTrigger);
+  peLayout->addRow(m_triggerCheck);
+
+  // Rotation locks
+  QHBoxLayout *lockLayout = new QHBoxLayout();
+  m_lockRotXCheck = new QCheckBox(tr("X"));
+  m_lockRotXCheck->setChecked(m_entity.physicsLockRotX);
+  m_lockRotYCheck = new QCheckBox(tr("Y"));
+  m_lockRotYCheck->setChecked(m_entity.physicsLockRotY);
+  m_lockRotZCheck = new QCheckBox(tr("Z"));
+  m_lockRotZCheck->setChecked(m_entity.physicsLockRotZ);
+  lockLayout->addWidget(m_lockRotXCheck);
+  lockLayout->addWidget(m_lockRotYCheck);
+  lockLayout->addWidget(m_lockRotZCheck);
+  peLayout->addRow(tr("Bloquear Rotación:"), lockLayout);
+
+  // Collision layers
+  m_collisionLayerSpin = new QSpinBox();
+  m_collisionLayerSpin->setRange(0, 65535);
+  m_collisionLayerSpin->setValue(m_entity.physicsCollisionLayer);
+  m_collisionLayerSpin->setToolTip(
+      tr("Capa de colisión de este objeto (bitmask)"));
+  peLayout->addRow(tr("Capa de Colisión:"), m_collisionLayerSpin);
+
+  m_collisionMaskSpin = new QSpinBox();
+  m_collisionMaskSpin->setRange(0, 65535);
+  m_collisionMaskSpin->setValue(m_entity.physicsCollisionMask);
+  m_collisionMaskSpin->setToolTip(tr("Con qué capas colisiona (bitmask)"));
+  peLayout->addRow(tr("Máscara de Colisión:"), m_collisionMaskSpin);
+
+  m_physicsEngineGroup->setLayout(peLayout);
+  mainLayout->addWidget(m_physicsEngineGroup);
+
+  if (m_entity.type != "model") {
+    m_physicsEngineGroup->setVisible(false);
+  }
+
+  // ===== MODEL ANIMATION SECTION =====
+  m_animationGroup = new QGroupBox(tr("Animación del Modelo (MD3)"));
+  QFormLayout *animLayout = new QFormLayout();
+
+  m_animSelectCombo = new QComboBox();
+  m_animSelectCombo->addItem(tr("(Personalizado / Manual)"), -1);
+  animLayout->addRow(tr("Animaciones Detectadas:"), m_animSelectCombo);
+
+  m_totalFramesLabel = new QLabel(tr("Total de Frames: ?"));
+  animLayout->addRow(m_totalFramesLabel);
+
+  m_playAnimCheck = new QCheckBox(tr("Reproducir Animación"));
+  m_playAnimCheck->setChecked(m_entity.animSpeed != 0.0f);
+  animLayout->addRow(m_playAnimCheck);
+
+  m_startFrameSpin = new QSpinBox();
+  m_startFrameSpin->setRange(0, 9999);
+  m_startFrameSpin->setValue(m_entity.startGraph);
+  animLayout->addRow(tr("Frame Inicial:"), m_startFrameSpin);
+
+  m_endFrameSpin = new QSpinBox();
+  m_endFrameSpin->setRange(0, 9999);
+  m_endFrameSpin->setValue(m_entity.endGraph);
+  animLayout->addRow(tr("Frame Final:"), m_endFrameSpin);
+
+  m_animSpeedSpin = new QDoubleSpinBox();
+  m_animSpeedSpin->setRange(0.0, 10.0);
+  m_animSpeedSpin->setSingleStep(0.1);
+  m_animSpeedSpin->setValue(m_entity.animSpeed == 0.0f ? 1.0f
+                                                       : m_entity.animSpeed);
+  animLayout->addRow(tr("Velocidad:"), m_animSpeedSpin);
+
+  m_animationGroup->setLayout(animLayout);
+  mainLayout->addWidget(m_animationGroup);
+
+  if (m_entity.type != "model") {
+    m_animationGroup->setVisible(false);
+  } else {
+    loadModelAnimations();
+  }
+
+  // Connect animation combo
+  connect(m_animSelectCombo,
+          QOverload<int>::of(&QComboBox::currentIndexChanged),
+          [this](int index) {
+            QVariant data = m_animSelectCombo->itemData(index);
+            if (data.isValid() && data.type() == QVariant::Point) {
+              QPoint range = data.toPoint();
+              m_startFrameSpin->setValue(range.x());
+              m_endFrameSpin->setValue(range.y());
+            }
+          });
+
   // Billboard Settings (conditional)
   QGroupBox *billboardGroup =
       new QGroupBox(tr("Configuración de Billboard (2D)"));
@@ -311,13 +491,13 @@ void EntityBehaviorDialog::setupUI() {
   connect(m_cameraFollowCheck, &QCheckBox::toggled, this,
           &EntityBehaviorDialog::updateVisibility);
 
-  // Dialog Buttons
+  // Dialog Buttons (added to outer layout, not scrolled)
   QDialogButtonBox *buttonBox =
       new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
   connect(buttonBox, &QDialogButtonBox::accepted, this,
           &EntityBehaviorDialog::onAccept);
   connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-  mainLayout->addWidget(buttonBox);
+  outerLayout->addWidget(buttonBox);
 }
 
 void EntityBehaviorDialog::updateVisibility() {
@@ -332,6 +512,14 @@ void EntityBehaviorDialog::updateVisibility() {
 
   // Show/hide event settings
   m_eventWidget->setVisible(type == EntityInstance::ACTIVATION_ON_EVENT);
+
+  if (m_animationGroup->isVisible()) {
+    bool play = m_playAnimCheck->isChecked();
+    m_startFrameSpin->setEnabled(play);
+    m_endFrameSpin->setEnabled(play);
+    m_animSpeedSpin->setEnabled(play);
+    m_animSelectCombo->setEnabled(play);
+  }
 
   // Player/Control visibility context
   bool isPlayer = m_playerGroup->isChecked();
@@ -414,7 +602,104 @@ void EntityBehaviorDialog::onAccept() {
   if (m_colSize[2])
     m_entity.height = m_colSize[2]->text().toInt();
 
+  // Physics Engine
+  m_entity.physicsEnabled = m_physicsEngineGroup->isChecked();
+  m_entity.physicsMass = m_massSpin->value();
+  m_entity.physicsFriction = m_frictionSpin->value();
+  m_entity.physicsRestitution = m_restitutionSpin->value();
+  m_entity.physicsGravityScale = m_gravityScaleSpin->value();
+  m_entity.physicsLinearDamping = m_linearDampingSpin->value();
+  m_entity.physicsAngularDamping = m_angularDampingSpin->value();
+  m_entity.physicsIsStatic = m_staticCheck->isChecked();
+  m_entity.physicsIsKinematic = m_kinematicCheck->isChecked();
+  m_entity.physicsIsTrigger = m_triggerCheck->isChecked();
+  m_entity.physicsLockRotX = m_lockRotXCheck->isChecked();
+  m_entity.physicsLockRotY = m_lockRotYCheck->isChecked();
+  m_entity.physicsLockRotZ = m_lockRotZCheck->isChecked();
+  m_entity.physicsCollisionLayer = m_collisionLayerSpin->value();
+  m_entity.physicsCollisionMask = m_collisionMaskSpin->value();
+
+  // Model Animation
+  if (m_entity.type == "model") {
+    m_entity.startGraph = m_startFrameSpin->value();
+    m_entity.endGraph = m_endFrameSpin->value();
+    if (m_playAnimCheck->isChecked()) {
+      m_entity.animSpeed = m_animSpeedSpin->value();
+    } else {
+      m_entity.animSpeed = 0.0f;
+    }
+  }
+
   accept();
+}
+
+void EntityBehaviorDialog::loadModelAnimations() {
+  if (m_entity.type != "model")
+    return;
+
+  QString assetPath = m_entity.assetPath;
+  QString fullPath;
+
+  if (QFileInfo(assetPath).isRelative()) {
+    fullPath = m_projectPath + "/" + assetPath;
+  } else {
+    fullPath = assetPath;
+  }
+
+  qDebug() << "Loading MD3 for frames info:" << fullPath;
+
+  MD3Loader loader;
+  if (loader.load(fullPath)) {
+    int totalFrames = loader.getNumFrames();
+    m_totalFramesLabel->setText(tr("Total de Frames: %1").arg(totalFrames));
+    m_startFrameSpin->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
+    m_endFrameSpin->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
+
+    // Try to find animation config: modelname.cfg first, then animation.cfg
+    QFileInfo md3Info(fullPath);
+    QString cfgPath =
+        md3Info.absolutePath() + "/" + md3Info.baseName() + ".cfg";
+    if (!QFile::exists(cfgPath)) {
+      cfgPath = md3Info.absolutePath() + "/animation.cfg";
+    }
+
+    QFile cfgFile(cfgPath);
+    if (cfgFile.open(QIODevice::ReadOnly)) {
+      QTextStream stream(&cfgFile);
+      m_animSelectCombo->clear();
+      m_animSelectCombo->addItem(tr("(Personalizado / Manual)"), -1);
+      while (!stream.atEnd()) {
+        QString line = stream.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith("//"))
+          continue;
+
+        // Format: first-frame, num-frames, looping-frames, frames-per-second
+        // Quake 3 MD3 standard
+        QStringList parts =
+            line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        if (parts.size() >= 2) {
+          QString name = "";
+          int commentIdx = line.indexOf("//");
+          if (commentIdx != -1) {
+            name = line.mid(commentIdx + 2).trimmed();
+          } else {
+            name = tr("Anim %1").arg(m_animSelectCombo->count());
+          }
+
+          bool ok1, ok2;
+          int first = parts[0].toInt(&ok1);
+          int length = parts[1].toInt(&ok2);
+          if (ok1 && ok2) {
+            m_animSelectCombo->addItem(name, QPoint(first, first + length - 1));
+          }
+        }
+      }
+      cfgFile.close();
+    }
+  } else {
+    m_totalFramesLabel->setText(
+        tr("Error cargando MD3 para lectura de frames."));
+  }
 }
 
 void EntityBehaviorDialog::onPreviewCode() {
@@ -447,11 +732,21 @@ QString EntityBehaviorDialog::generatePreviewCode() const {
   code += "Begin\n";
   code += "    // Configuración inicial\n";
 
+  QString actionCode = m_entity.customAction;
+  if (!m_entity.behaviorGraph.nodes.isEmpty()) {
+    actionCode = ProcessGenerator::generateGraphCode(m_entity.behaviorGraph);
+  }
+
   // Position
   code += QString("    world_x = %1; world_y = %2; world_z = %3;\n")
               .arg(m_entity.x)
               .arg(m_entity.y)
               .arg(m_entity.z);
+
+  if (!actionCode.isEmpty()) {
+    code += "\n    // Lógica del Grafo de Comportamiento:\n";
+    code += "    " + actionCode.replace("\n", "\n    ") + "\n";
+  }
 
   // Player variables
   if (m_entity.isPlayer) {

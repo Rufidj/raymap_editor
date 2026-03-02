@@ -864,13 +864,8 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
       out << "        npc_follow_path(" << entity.npcPathId
           << ", &npc_current_waypoint, &npc_wait_counter, &npc_direction, "
              "&world_x, &world_y, &world_z, &world_angle);\n";
-      // NPC with path always snaps to floor to avoid sinking into terrain
-      out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y) + "
-             "5.0;\n";
-    }
-    if (entity.snapToFloor &&
-        !(entity.npcPathId >= 0 && entity.autoStartPath)) {
-      // Manual snapToFloor (only if not already done by NPC path above)
+    } else if (entity.snapToFloor) {
+      out << "        // Snap to floor for non-path entities\n";
       out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y) + "
              "5.0;\n";
     }
@@ -886,24 +881,25 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
       out << "        RAY_UPDATE_SPRITE_POSITION(sprite_id, world_x, world_y, "
              "world_z);\n";
       out << "        RAY_SET_SPRITE_ANGLE(sprite_id, world_angle * "
-             "57.2957);\n";
+             "57.2957);\n"; // Radians to Degrees
       if (entity.animSpeed != 0) {
-        out << "        anim_interpolation += "
+        out << "        // Smooth Animation Loop\n";
+        out << "        anim_interpolation = anim_interpolation + "
             << (qAbs(entity.animSpeed) / 60.0f) << ";\n";
         out << "        if (anim_interpolation >= 1.0)\n";
-        out << "            anim_interpolation = 0.0;\n";
-        out << "            anim_current_frame++;\n";
-        out << "            if (anim_current_frame > " << entity.endGraph
-            << ") anim_current_frame = " << entity.startGraph << "; end\n";
-        out << "            anim_next_frame = anim_current_frame + 1;\n";
-        out << "            if (anim_next_frame > " << entity.endGraph
+        out << "            begin\n";
+        out << "                anim_interpolation = 0.0;\n";
+        out << "                anim_current_frame = anim_next_frame;\n";
+        out << "                anim_next_frame = anim_current_frame + 1;\n";
+        out << "                if (anim_next_frame > " << entity.endGraph
             << ") anim_next_frame = " << entity.startGraph << "; end\n";
+        out << "            end\n";
         out << "        end\n";
         out << "        RAY_SET_SPRITE_ANIM(sprite_id, anim_current_frame, "
                "anim_next_frame, anim_interpolation);\n";
       } else {
         out << "        RAY_SET_SPRITE_ANIM(sprite_id, anim_current_frame, "
-               "anim_next_frame, 0.0);\n";
+               "anim_current_frame, 0.0);\n";
       }
     }
 
@@ -1100,13 +1096,11 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
 
   out << "  dx = target_x - *cur_x;\n";
   out << "  dy = target_y - *cur_y;\n";
-  out << "  // Use 2D distance for following and arrival\n";
   out << "  d_dist = sqrt(dx*dx + dy*dy);\n\n";
 
-  out << "  if (d_dist < speed)\n";
-  out << "    *cur_x = target_x;\n";
-  out << "    *cur_y = target_y;\n";
-  out << "    *wait_counter = wait_time;\n";
+  out << "  if (d_dist < speed + 1.0)\n";
+  out << "    *cur_x = target_x; *cur_y = target_y;\n";
+  out << "    if (wait_time > 0) *wait_counter = wait_time; end\n";
   out << "    switch (loop_mode)\n";
   out << "      case 0: if (*current_wp < waypoint_count - 1) *current_wp = "
          "*current_wp + 1; end; end\n";
@@ -1114,20 +1108,27 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
          "end\n";
   out << "      case 2: *current_wp = *current_wp + *direction;\n";
   out << "              if (*current_wp >= waypoint_count - 1) *direction = "
-         "-1;\n";
-  out << "              elseif (*current_wp <= 0) *direction = 1; end; end\n";
+         "-1; end\n";
+  out << "              if (*current_wp <= 0) *direction = 1; end; end\n";
   out << "      case 3: *current_wp = rand(0, waypoint_count - 1); end\n";
   out << "    end\n";
   out << "  elseif (d_dist > 0.0)\n";
   out << "    *cur_x = *cur_x + (dx * speed / d_dist);\n";
   out << "    *cur_y = *cur_y + (dy * speed / d_dist);\n";
-  out << "    // Move Z independently if needed\n";
+  out << "    // Smooth Z Z-climb vs floor sensing\n";
   out << "    dz = target_z - *cur_z;\n";
-  out << "    *cur_z = *cur_z + (dz * speed / (d_dist + 1.0));\n\n";
-  out << "    if (look_angle >= 0.0)\n";
-  out << "        *cur_angle = look_angle * 0.01745329;\n";
+  out << "    if (target_z <= 1.0)\n";
+  out << "        *cur_z = RAY_GET_FLOOR_HEIGHT(*cur_x, *cur_y) + 5.0;\n";
+  out << "    elseif (dz > 1.0 or dz < -1.0)\n";
+  out << "        *cur_z = *cur_z + (dz * 0.1);\n";
   out << "    else\n";
-  out << "        *cur_angle = atan2(dy, dx);\n";
+  out << "        *cur_z = target_z;\n";
+  out << "    end\n\n";
+
+  out << "    if (look_angle > -900000.0) // Waypoint angle override\n";
+  out << "        *cur_angle = look_angle * 0.01745329;\n";
+  out << "    elseif (d_dist > 20.0) // 20-unit deadzone for rotation\n";
+  out << "        *cur_angle = atan2(dy, dx) * 0.00001745329;\n";
   out << "    end\n";
   out << "  end\n";
   out << "end\n";

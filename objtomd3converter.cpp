@@ -120,6 +120,11 @@ bool ObjToMd3Converter::loadObj(const QString &filename) {
   m_faceMaterialIndices.clear();
   m_materials.clear();
   m_materialNames.clear();
+  m_vertexSkins.clear();
+  m_glbNodes.clear();
+  m_glbAnimations.clear();
+  m_glbSkins.clear();
+  m_animationFrames.clear();
   // Pre-add dummy UV if needed (though logic usually handles it)
 
   QTextStream in(&file);
@@ -236,39 +241,23 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
   QDataStream in(&file);
   in.setByteOrder(QDataStream::LittleEndian);
 
-  // Header (12 bytes)
-  quint32 magic;
-  quint32 version;
-  quint32 length;
+  quint32 magic, version, length;
   in >> magic >> version >> length;
-
-  if (magic != 0x46546C67) { // "glTF"
-    qWarning() << "Invalid GLB Magic";
+  if (magic != 0x46546C67)
     return false;
-  }
 
-  // JSON Chunk Header (8 bytes)
-  quint32 jsonChunkLen;
-  quint32 jsonChunkType;
+  quint32 jsonChunkLen, jsonChunkType;
   in >> jsonChunkLen >> jsonChunkType;
-
-  // JSON Chunk Type must be 0x4E4F534A ("JSON")
-  if (jsonChunkType != 0x4E4F534A) {
+  if (jsonChunkType != 0x4E4F534A)
     return false;
-  }
 
   QByteArray jsonData = file.read(jsonChunkLen);
-
-  // BIN Chunk
-  quint32 binChunkLen = 0;
-  quint32 binChunkType = 0;
   QByteArray binData;
-
   if (!file.atEnd()) {
+    quint32 binChunkLen, binChunkType;
     in >> binChunkLen >> binChunkType;
-    if (binChunkType == 0x004E4942) {
+    if (binChunkType == 0x004E4942)
       binData = file.read(binChunkLen);
-    }
   }
 
   QJsonDocument doc = QJsonDocument::fromJson(jsonData);
@@ -276,15 +265,9 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
     return false;
   QJsonObject root = doc.object();
 
-  QJsonArray accessors = root["accessors"].toArray();
-  QJsonArray bufferViews = root["bufferViews"].toArray();
-
-  m_glbAccessors = accessors;
-  m_glbBufferViews = bufferViews;
+  m_glbAccessors = root["accessors"].toArray();
+  m_glbBufferViews = root["bufferViews"].toArray();
   m_glbBinData = binData;
-
-  QJsonArray meshes = root["meshes"].toArray();
-  QJsonArray materials = root["materials"].toArray();
 
   m_rawVertices.clear();
   m_rawTexCoords.clear();
@@ -294,123 +277,69 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
   m_faceMaterialIndices.clear();
   m_materials.clear();
   m_materialNames.clear();
+  m_vertexSkins.clear();
+  m_glbNodes.clear();
+  m_glbAnimations.clear();
+  m_glbSkins.clear();
+  m_animationFrames.clear();
 
   QJsonArray images = root["images"].toArray();
   QJsonArray textures = root["textures"].toArray();
+  QJsonArray materials = root["materials"].toArray();
+  QJsonArray meshes = root["meshes"].toArray();
+  QJsonArray nodes = root["nodes"].toArray();
 
   QVector<QImage> loadedImages;
   for (const QJsonValue &iv : images) {
     QJsonObject imgObj = iv.toObject();
     QImage img;
-
     if (imgObj.contains("bufferView")) {
       int bvIdx = imgObj["bufferView"].toInt(-1);
-      if (bvIdx >= 0 && bvIdx < bufferViews.size()) {
-        QJsonObject bv = bufferViews[bvIdx].toObject();
+      if (bvIdx >= 0 && bvIdx < m_glbBufferViews.size()) {
+        QJsonObject bv = m_glbBufferViews[bvIdx].toObject();
         int bvOffset = bv["byteOffset"].toInt(0);
         int bvLen = bv["byteLength"].toInt();
-        int bufIdx = bv["buffer"].toInt(0);
-        if (bufIdx == 0 && binData.size() >= bvOffset + bvLen) {
-          QByteArray imgData = binData.mid(bvOffset, bvLen);
-          img.loadFromData(imgData);
-        }
+        img.loadFromData(binData.mid(bvOffset, bvLen));
       }
-    } else if (imgObj.contains("uri")) {
-      QString uri = imgObj["uri"].toString();
-      if (uri.startsWith("data:")) {
-        // Handle Data URI
-        int commaIdx = uri.indexOf(',');
-        if (commaIdx != -1) {
-          QByteArray data =
-              QByteArray::fromBase64(uri.mid(commaIdx + 1).toLatin1());
-          img.loadFromData(data);
-        }
-      } else {
-        // Handle external file
-        QFileInfo fi(filename);
-        QString path = fi.absolutePath() + "/" + uri;
-        img.load(path);
-      }
-    }
-
-    if (img.isNull()) {
-      qWarning() << "GLB: Failed to load image:" << imgObj["name"].toString()
-                 << imgObj["uri"].toString();
-    } else {
-      qDebug() << "GLB: Loaded image, size:" << img.size();
     }
     loadedImages.append(img);
   }
 
-  // Parse Materials
   for (int i = 0; i < materials.size(); ++i) {
     QJsonObject mat = materials[i].toObject();
     QString name = mat["name"].toString(QString("Material_%1").arg(i));
-
-    QColor color = Qt::gray;
-    QImage texImage;
-    bool hasTex = false;
-
     ObjMaterial m;
     m.glbImageIdx = -1;
+    QColor color = Qt::gray;
+    bool hasTex = false;
 
     if (mat.contains("pbrMetallicRoughness")) {
       QJsonObject pbr = mat["pbrMetallicRoughness"].toObject();
       if (pbr.contains("baseColorFactor")) {
-        QJsonArray factors = pbr["baseColorFactor"].toArray();
-        if (factors.size() >= 3) {
-          int r = static_cast<int>(factors[0].toDouble() * 255);
-          int g = static_cast<int>(factors[1].toDouble() * 255);
-          int b = static_cast<int>(factors[2].toDouble() * 255);
-          color = QColor(r, g, b);
-        }
+        QJsonArray f = pbr["baseColorFactor"].toArray();
+        color = QColor(f[0].toDouble() * 255, f[1].toDouble() * 255,
+                       f[2].toDouble() * 255);
       }
       if (pbr.contains("baseColorTexture")) {
-        int texIdx = pbr["baseColorTexture"].toObject()["index"].toInt(-1);
-        if (texIdx >= 0 && texIdx < textures.size()) {
-          int sourceIdx = textures[texIdx].toObject()["source"].toInt(-1);
-          if (sourceIdx >= 0 && sourceIdx < loadedImages.size()) {
-            texImage = loadedImages[sourceIdx];
-            hasTex = !texImage.isNull();
-            m.glbImageIdx = sourceIdx; // Track the source index
+        int tIdx = pbr["baseColorTexture"].toObject()["index"].toInt(-1);
+        if (tIdx >= 0 && tIdx < textures.size()) {
+          int sIdx = textures[tIdx].toObject()["source"].toInt(-1);
+          if (sIdx >= 0 && sIdx < loadedImages.size()) {
+            m.textureImage = loadedImages[sIdx];
+            m.hasTexture = !m.textureImage.isNull();
+            m.glbImageIdx = sIdx;
           }
         }
       }
     }
-
-    // Fallback: Check for emissive texture if baseColor is missing
-    if (!hasTex && mat.contains("emissiveTexture")) {
-      int texIdx = mat["emissiveTexture"].toObject()["index"].toInt(-1);
-      if (texIdx >= 0 && texIdx < textures.size()) {
-        int sourceIdx = textures[texIdx].toObject()["source"].toInt(-1);
-        if (sourceIdx >= 0 && sourceIdx < loadedImages.size()) {
-          texImage = loadedImages[sourceIdx];
-          hasTex = !texImage.isNull();
-          m.glbImageIdx = sourceIdx;
-        }
-      }
-    }
-
-    if (!hasTex && mat.contains("emissiveFactor")) {
-      QJsonArray factors = mat["emissiveFactor"].toArray();
-      if (factors.size() >= 3) {
-        color = QColor(factors[0].toDouble() * 255, factors[1].toDouble() * 255,
-                       factors[2].toDouble() * 255);
-      }
-    }
-
     m.name = name;
     m.color = color;
-    m.textureImage = texImage;
-    m.hasTexture = hasTex;
     m_materials[name] = m;
     m_materialNames.append(name);
   }
 
-  // Parse Nodes
-  QJsonArray nodes = root["nodes"].toArray();
-  for (int i = 0; i < nodes.size(); ++i) {
-    QJsonObject n = nodes[i].toObject();
+  for (const QJsonValue &nv : nodes) {
+    QJsonObject n = nv.toObject();
     GlbNode node;
     node.name = n["name"].toString();
     if (n.contains("translation")) {
@@ -441,7 +370,7 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
     node.mesh = n["mesh"].toInt(-1);
     m_glbNodes.append(node);
   }
-  // Setup parents
+
   for (int i = 0; i < m_glbNodes.size(); ++i) {
     for (int child : m_glbNodes[i].children) {
       if (child >= 0 && child < m_glbNodes.size())
@@ -449,7 +378,6 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
     }
   }
 
-  // Parse Skins
   QJsonArray skins = root["skins"].toArray();
   for (const QJsonValue &sv : skins) {
     QJsonObject s = sv.toObject();
@@ -457,7 +385,6 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
     skin.name = s["name"].toString();
     for (const QJsonValue &jv : s["joints"].toArray())
       skin.joints.append(jv.toInt());
-
     int ibmIdx = s["inverseBindMatrices"].toInt(-1);
     if (ibmIdx >= 0) {
       int count, compType, stride;
@@ -476,20 +403,16 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
     m_glbSkins.append(skin);
   }
 
-  // Parse Animations
   QJsonArray animations = root["animations"].toArray();
   for (const QJsonValue &av : animations) {
     QJsonObject a = av.toObject();
     GlbAnimation anim;
     anim.name = a["name"].toString();
-
     QJsonArray samplers = a["samplers"].toArray();
     for (const QJsonValue &sv : samplers) {
       QJsonObject s = sv.toObject();
       GlbAnimation::Sampler sampler;
-      int inIdx = s["input"].toInt();
-      int outIdx = s["output"].toInt();
-
+      int inIdx = s["input"].toInt(), outIdx = s["output"].toInt();
       int count, compType, stride;
       const char *inData = getAccessorData(inIdx, count, compType, stride);
       if (inData && compType == 5126) {
@@ -500,26 +423,16 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
       const char *outData = getAccessorData(outIdx, count, compType, stride);
       if (outData && compType == 5126) {
         const float *f = reinterpret_cast<const float *>(outData);
-        // Detect number of components based on GLTF type
-        QString typeStr = accessors[outIdx].toObject()["type"].toString();
-        int components = 0;
-        if (typeStr == "VEC4")
-          components = 4;
-        else if (typeStr == "VEC3")
-          components = 3;
-        else if (typeStr == "VEC2")
-          components = 2;
-        else
-          components = 1;
-
-        if (components > 0) {
-          for (int i = 0; i < count * components; ++i)
-            sampler.values.append(f[i]);
-        }
+        QString typeStr = m_glbAccessors[outIdx].toObject()["type"].toString();
+        int components =
+            (typeStr == "VEC4")
+                ? 4
+                : (typeStr == "VEC3" ? 3 : (typeStr == "VEC2" ? 2 : 1));
+        for (int i = 0; i < count * components; ++i)
+          sampler.values.append(f[i]);
       }
       anim.samplers.append(sampler);
     }
-
     QJsonArray channels = a["channels"].toArray();
     for (const QJsonValue &cv : channels) {
       QJsonObject c = cv.toObject();
@@ -532,111 +445,61 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
     }
     m_glbAnimations.append(anim);
   }
-  auto getAccessorData = [&](int accessorIdx, int &count, int &compType,
-                             int &stride) -> const char * {
-    if (accessorIdx < 0 || accessorIdx >= accessors.size())
-      return nullptr;
-    QJsonObject acc = accessors[accessorIdx].toObject();
-    int bvIdx = acc["bufferView"].toInt();
-    int byteOffset = acc["byteOffset"].toInt(0);
-    count = acc["count"].toInt();
-    compType = acc["componentType"].toInt();
 
-    if (bvIdx < 0 || bvIdx >= bufferViews.size())
-      return nullptr;
-    QJsonObject bv = bufferViews[bvIdx].toObject();
-    int bvOffset = bv["byteOffset"].toInt(0);
-    stride = bv["byteStride"].toInt(0); // 0 = tightly packed
-
-    if (bv.contains("buffer") && bv["buffer"].toInt() != 0)
-      return nullptr;
-
-    int finalOffset = bvOffset + byteOffset;
-    if (finalOffset + 4 > binData.size())
-      return nullptr;
-
-    return binData.constData() + finalOffset;
-  };
-
-  // Iterate meshes
-  int baseVertexIndex = 0;
-  for (const QJsonValue &mv : meshes) {
-    QJsonArray primitives = mv.toObject()["primitives"].toArray();
+  for (int nIdx = 0; nIdx < m_glbNodes.size(); ++nIdx) {
+    const auto &node = m_glbNodes[nIdx];
+    if (node.mesh == -1)
+      continue;
+    QJsonObject meshObj = meshes[node.mesh].toObject();
+    QJsonArray primitives = meshObj["primitives"].toArray();
     for (const QJsonValue &pv : primitives) {
       QJsonObject prim = pv.toObject();
       QJsonObject attrs = prim["attributes"].toObject();
-
-      int posIdx = attrs["POSITION"].toInt(-1);
-      int uvIdx = attrs["TEXCOORD_0"].toInt(-1);
-      int jointIdx = attrs["JOINTS_0"].toInt(-1);
-      int weightIdx = attrs["WEIGHTS_0"].toInt(-1);
-      int indicesIdx = prim["indices"].toInt(-1);
-      int matIdx = prim["material"].toInt(-1);
-
+      int posIdx = attrs["POSITION"].toInt(-1),
+          uvIdx = attrs["TEXCOORD_0"].toInt(-1);
+      int jointIdx = attrs["JOINTS_0"].toInt(-1),
+          weightIdx = attrs["WEIGHTS_0"].toInt(-1);
+      int indicesIdx = prim["indices"].toInt(-1),
+          matIdx = prim["material"].toInt(-1);
       if (posIdx == -1)
         continue;
 
-      // Load Vertices
-      int vCount = 0, vCompType = 0, vStride = 0;
+      int vCount, vCompType, vStride;
       const char *vDataRaw =
           getAccessorData(posIdx, vCount, vCompType, vStride);
       if (!vDataRaw)
         continue;
       if (vStride == 0)
-        vStride = 12; // vec3 float default
+        vStride = 12;
 
-      // Load UVs
-      int uvCount = 0, uvCompType = 0, uvStride = 0;
-      const char *uvRaw = nullptr;
-      if (uvIdx >= 0) {
-        uvRaw = getAccessorData(uvIdx, uvCount, uvCompType, uvStride);
-        if (uvRaw && uvStride == 0) {
-          if (uvCompType == 5126)
-            uvStride = 8; // FLOAT
-          else if (uvCompType == 5123)
-            uvStride = 4; // USHORT
-          else if (uvCompType == 5121)
-            uvStride = 2; // UBYTE
-          else
-            uvStride = 8;
-        }
-      }
+      int uvCount, uvCompType, uvStride;
+      const char *uvRaw =
+          (uvIdx >= 0) ? getAccessorData(uvIdx, uvCount, uvCompType, uvStride)
+                       : nullptr;
+      if (uvRaw && uvStride == 0)
+        uvStride = (uvCompType == 5126 ? 8 : (uvCompType == 5123 ? 4 : 2));
 
-      baseVertexIndex = m_finalVertices.size();
-
+      int baseVertexIndex = m_finalVertices.size();
       for (int i = 0; i < vCount; i++) {
         const float *vPtr =
             reinterpret_cast<const float *>(vDataRaw + i * vStride);
-        float x = vPtr[0];
-        float y = vPtr[1];
-        float z = vPtr[2];
-        m_finalVertices.append(
-            QVector3D(x, y, z)); // Keep original coords (y up)
-
+        m_finalVertices.append(QVector3D(vPtr[0], vPtr[1], vPtr[2]));
         if (uvRaw && i < uvCount) {
-          float u = 0.0f, v = 0.0f;
+          float u = 0, v = 0;
           const char *uvPtr = uvRaw + i * uvStride;
-
-          if (uvCompType == 5126) { // FLOAT
-            const float *fuv = reinterpret_cast<const float *>(uvPtr);
-            u = fuv[0];
-            v = fuv[1];
-          } else if (uvCompType == 5123) { // UNSIGNED_SHORT (normalized)
-            const quint16 *suv = reinterpret_cast<const quint16 *>(uvPtr);
-            u = suv[0] / 65535.0f;
-            v = suv[1] / 65535.0f;
-          } else if (uvCompType == 5121) { // UNSIGNED_BYTE (normalized)
-            const quint8 *buv = reinterpret_cast<const quint8 *>(uvPtr);
-            u = buv[0] / 255.0f;
-            v = buv[1] / 255.0f;
+          if (uvCompType == 5126) {
+            u = reinterpret_cast<const float *>(uvPtr)[0];
+            v = reinterpret_cast<const float *>(uvPtr)[1];
+          } else if (uvCompType == 5123) {
+            u = reinterpret_cast<const quint16 *>(uvPtr)[0] / 65535.f;
+            v = reinterpret_cast<const quint16 *>(uvPtr)[1] / 65535.f;
           }
           m_finalTexCoords.append(QVector2D(u, v));
-        } else {
+        } else
           m_finalTexCoords.append(QVector2D(0.5f, 0.5f));
-        }
 
-        // Load Skin Data
         SkinData sd;
+        sd.parentNodeIdx = nIdx;
         if (jointIdx >= 0 && weightIdx >= 0) {
           int jCount, jCompType, jStride;
           const char *jData =
@@ -645,80 +508,54 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
             if (jStride == 0)
               jStride = (jCompType == 5123 ? 8 : 4);
             const char *jPtr = jData + i * jStride;
-            for (int j = 0; j < 4; ++j) {
-              if (jCompType == 5123)
-                sd.joints[j] = reinterpret_cast<const quint16 *>(jPtr)[j];
-              else
-                sd.joints[j] = reinterpret_cast<const quint8 *>(jPtr)[j];
-            }
+            for (int j = 0; j < 4; ++j)
+              sd.joints[j] =
+                  (jCompType == 5123
+                       ? (int)reinterpret_cast<const quint16 *>(jPtr)[j]
+                       : (int)reinterpret_cast<const quint8 *>(jPtr)[j]);
           }
-        }
-        int wCount, wCompType, wStride;
-        const char *wData =
-            getAccessorData(weightIdx, wCount, wCompType, wStride);
-        if (wData) {
-          if (wStride == 0)
-            wStride = 16;
-          const float *wPtr =
-              reinterpret_cast<const float *>(wData + i * wStride);
-          for (int j = 0; j < 4; ++j)
-            sd.weights[j] = wPtr[j];
+          int wCount, wCompType, wStride;
+          const char *wData =
+              getAccessorData(weightIdx, wCount, wCompType, wStride);
+          if (wData) {
+            if (wStride == 0)
+              wStride = 16;
+            const float *wPtr =
+                reinterpret_cast<const float *>(wData + i * wStride);
+            for (int j = 0; j < 4; ++j)
+              sd.weights[j] = wPtr[j];
+          }
         }
         m_vertexSkins.append(sd);
       }
 
-      qDebug() << "GLB Primitive: loaded" << vCount
-               << "vertices, baseIndex:" << baseVertexIndex;
-
-      // Load Indices (Triangles)
       if (indicesIdx >= 0) {
-        int iCount = 0, iCompType = 0, iStride = 0;
+        int iCount, iCompType, iStride;
         const char *iData =
             getAccessorData(indicesIdx, iCount, iCompType, iStride);
-        if (!iData)
-          continue;
-        // Indices are tightly packed usually, componentType dictates stride
-
-        for (int i = 0; i < iCount; i += 3) {
-          if (i + 2 >= iCount)
-            break;
-
-          int idx1, idx2, idx3;
-          if (iCompType == 5123) { // unsigned short
-            const quint16 *p = reinterpret_cast<const quint16 *>(iData);
-            idx1 = p[i + 0];
-            idx2 = p[i + 1];
-            idx3 = p[i + 2];
-          } else if (iCompType == 5125) { // unsigned int
-            const quint32 *p = reinterpret_cast<const quint32 *>(iData);
-            idx1 = p[i + 0];
-            idx2 = p[i + 1];
-            idx3 = p[i + 2];
-          } else { // byte? UBYTE 5121
-            const quint8 *p = reinterpret_cast<const quint8 *>(iData);
-            idx1 = p[i + 0];
-            idx2 = p[i + 1];
-            idx3 = p[i + 2];
+        if (iData) {
+          for (int i = 0; i < iCount; i += 3) {
+            Md3Triangle tri;
+            if (iCompType == 5123) {
+              const quint16 *p = reinterpret_cast<const quint16 *>(iData);
+              tri.indices[0] = baseVertexIndex + p[i];
+              tri.indices[1] = baseVertexIndex + p[i + 1];
+              tri.indices[2] = baseVertexIndex + p[i + 2];
+            } else {
+              const quint32 *p = reinterpret_cast<const quint32 *>(iData);
+              tri.indices[0] = baseVertexIndex + p[i];
+              tri.indices[1] = baseVertexIndex + p[i + 1];
+              tri.indices[2] = baseVertexIndex + p[i + 2];
+            }
+            m_triangles.append(tri);
+            m_faceMaterialIndices.append(matIdx);
           }
-
-          Md3Triangle tri;
-          tri.indices[0] = baseVertexIndex + idx1;
-          tri.indices[1] = baseVertexIndex + idx2;
-          tri.indices[2] = baseVertexIndex + idx3;
-          m_triangles.append(tri);
-          m_faceMaterialIndices.append(matIdx);
         }
-
-        qDebug() << "  Loaded" << (iCount / 3)
-                 << "triangles, index range:" << baseVertexIndex << "to"
-                 << (m_finalVertices.size() - 1);
       }
     }
   }
 
-  // Bake animations if present
   bakeAnimations();
-
   return true;
 }
 
@@ -749,8 +586,10 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale,
     const QVector<QVector3D> &sourceVerts = vertices(f);
     for (const QVector3D &v : sourceVerts) {
       QVector3D tv = transform.map(v);
-      // Final Swap Y/Z for MD3 (x, z, y) to match Build Engine Z-up
-      frameVerts.append(QVector3D(tv.x(), tv.z(), tv.y()));
+      // Coordinate System Mapping: GLTF (Y-Up, Z-Forward) -> MD3 (Z-Up,
+      // X-Forward, Y-Left) GLTF X(Right) -> MD3 -Y(Left) GLTF Y(Up)    -> MD3
+      // Z(Up) GLTF Z(Fwd)   -> MD3 X(Fwd)
+      frameVerts.append(QVector3D(tv.z(), -tv.x(), tv.y()));
     }
     allFrames.append(frameVerts);
   }
@@ -808,9 +647,10 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale,
       maxZ = qMax(maxZ, z);
     }
     out << minX << minY << minZ << maxX << maxY << maxZ;
-    out << (minX + maxX) / 2.0f << (minY + maxY) / 2.0f
-        << (minZ + maxZ) / 2.0f;                                     // Origin
-    out << qMax(maxX - minX, qMax(maxY - minY, maxZ - minZ)) / 2.0f; // Radius
+    out << 0.0f << 0.0f
+        << 0.0f; // Origin MUST be fixed at (0,0,0) to prevent animation jumping
+    out << qMax(qAbs(maxX),
+                qMax(qAbs(maxY), qAbs(maxZ))); // Radius based on center
     char frameNameBuf[16] = {0};
     sprintf(frameNameBuf, "frame_%d", f);
     out.writeRawData(frameNameBuf, 16);
@@ -889,10 +729,12 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale,
     for (int f = 0; f < frameCount; ++f) {
       for (int gIdx : sortedVerts) {
         QVector3D v = allFrames[f][gIdx];
+        // Bake the user-provided scale back into the mesh
+        // MD3 coordinates are int16 scaled by 1/64.0f by the engine
         out << (short)qBound(-32768, (int)(v.x() * scale * 64.0f), 32767);
         out << (short)qBound(-32768, (int)(v.y() * scale * 64.0f), 32767);
         out << (short)qBound(-32768, (int)(v.z() * scale * 64.0f), 32767);
-        out << (short)0; // Normal
+        out << (short)0; // Normal placeholder
       }
     }
 
@@ -1261,9 +1103,13 @@ void ObjToMd3Converter::updateNodeTransforms(
 
   GlbNode &node = nodes[nodeIdx];
   QMatrix4x4 local;
-  local.translate(node.translation);
-  local.rotate(node.rotation);
-  local.scale(node.scale);
+  if (!node.matrix.isIdentity()) {
+    local = node.matrix;
+  } else {
+    local.translate(node.translation);
+    local.rotate(node.rotation);
+    local.scale(node.scale);
+  }
   node.globalTransform = parentTransform * local;
 
   for (int child : node.children) {
@@ -1291,13 +1137,51 @@ const char *ObjToMd3Converter::getAccessorData(int accessorIdx, int &count,
 }
 
 void ObjToMd3Converter::bakeAnimations() {
-  if (m_glbAnimations.isEmpty() || m_glbNodes.isEmpty())
-    return;
-
   m_animationFrames.clear();
   float fps = 24.0f;
-  int totalFramesGlobal = 0;
 
+  if (m_glbAnimations.isEmpty()) {
+    // Generate static frame (Pose 0)
+    QVector<GlbNode> nodes = m_glbNodes;
+    for (int i = 0; i < nodes.size(); ++i) {
+      if (nodes[i].parent == -1)
+        updateNodeTransforms(nodes, i, QMatrix4x4());
+    }
+    QVector<QVector3D> frameVerts;
+    frameVerts.reserve(m_finalVertices.size());
+    for (int i = 0; i < m_finalVertices.size(); ++i) {
+      const SkinData &sd = m_vertexSkins[i];
+      if (!m_glbSkins.isEmpty() && (sd.weights[0] > 0 || sd.weights[1] > 0 ||
+                                    sd.weights[2] > 0 || sd.weights[3] > 0)) {
+        const GlbSkin &skin = m_glbSkins[0];
+        QVector3D pos(0, 0, 0);
+        float tw = 0;
+        for (int k = 0; k < 4; ++k) {
+          if (sd.weights[k] <= 0)
+            continue;
+          int jointNodeIdx = skin.joints[sd.joints[k]];
+          if (jointNodeIdx >= 0 && jointNodeIdx < nodes.size() &&
+              sd.joints[k] < skin.inverseBindMatrices.size()) {
+            QMatrix4x4 jointMat = nodes[jointNodeIdx].globalTransform *
+                                  skin.inverseBindMatrices[sd.joints[k]];
+            pos += (jointMat.map(m_finalVertices[i])) * sd.weights[k];
+            tw += sd.weights[k];
+          }
+        }
+        frameVerts.append(tw > 0.0001f ? pos / tw : m_finalVertices[i]);
+      } else if (sd.parentNodeIdx >= 0 && sd.parentNodeIdx < nodes.size()) {
+        frameVerts.append(
+            nodes[sd.parentNodeIdx].globalTransform.map(m_finalVertices[i]));
+      } else {
+        frameVerts.append(m_finalVertices[i]);
+      }
+    }
+    m_animationFrames.append(frameVerts);
+    setProgress(100, "Baking static pose complete.");
+    return;
+  }
+
+  int totalFramesGlobal = 0;
   // First pass: Calculate frame ranges for all animations
   for (int a = 0; a < m_glbAnimations.size(); ++a) {
     float maxTime = 0;
@@ -1346,11 +1230,8 @@ void ObjToMd3Converter::bakeAnimations() {
                              : (curTime - sampler.times[k1]) /
                                    (sampler.times[k2] - sampler.times[k1]);
 
-        // Determine number of components for this sampler
-        QString typeStr =
-            m_glbAccessors[channel.sampler].toObject()["type"].toString();
-        int comps =
-            (typeStr == "VEC4") ? 4 : 3; // Rotations are vec4, others vec3
+        // Determine number of components for this sampler based on path
+        int comps = (channel.path == "rotation") ? 4 : 3;
 
         if (channel.path == "translation" &&
             sampler.values.size() >= k2 * comps + 3) {
@@ -1391,9 +1272,10 @@ void ObjToMd3Converter::bakeAnimations() {
       frameVerts.reserve(m_finalVertices.size());
 
       for (int i = 0; i < m_finalVertices.size(); ++i) {
-        if (i < m_vertexSkins.size() && !m_glbSkins.isEmpty()) {
-          const SkinData &sd = m_vertexSkins[i];
-          const GlbSkin &skin = m_glbSkins[0];
+        const SkinData &sd = m_vertexSkins[i];
+        if (!m_glbSkins.isEmpty() && (sd.weights[0] > 0 || sd.weights[1] > 0 ||
+                                      sd.weights[2] > 0 || sd.weights[3] > 0)) {
+          const GlbSkin &skin = m_glbSkins[0]; // Assume first skin
           QVector3D pos(0, 0, 0);
           float tw = 0;
           for (int k = 0; k < 4; ++k) {
@@ -1408,7 +1290,11 @@ void ObjToMd3Converter::bakeAnimations() {
               tw += sd.weights[k];
             }
           }
-          frameVerts.append(tw > 0 ? pos / tw : m_finalVertices[i]);
+          frameVerts.append(tw > 0.0001f ? pos / tw : m_finalVertices[i]);
+        } else if (sd.parentNodeIdx >= 0 && sd.parentNodeIdx < nodes.size()) {
+          // Non-skinned vertex, apply its parent node transform
+          frameVerts.append(
+              nodes[sd.parentNodeIdx].globalTransform.map(m_finalVertices[i]));
         } else {
           frameVerts.append(m_finalVertices[i]);
         }

@@ -147,6 +147,7 @@ private:
   struct SkinData {
     int joints[4] = {0, 0, 0, 0};
     float weights[4] = {0, 0, 0, 0};
+    int parentNodeIdx = -1;
   };
   QVector<SkinData> m_vertexSkins;
 

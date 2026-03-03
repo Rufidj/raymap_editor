@@ -1,6 +1,7 @@
 #include "entitybehaviordialog.h"
 #include "behaviornodeeditor.h"
 #include "md3loader.h"
+#include "objtomd3converter.h"
 #include "processgenerator.h"
 #include <QCheckBox>
 #include <QComboBox>
@@ -342,7 +343,7 @@ void EntityBehaviorDialog::setupUI() {
   }
 
   // ===== MODEL ANIMATION SECTION =====
-  m_animationGroup = new QGroupBox(tr("Animación del Modelo (MD3)"));
+  m_animationGroup = new QGroupBox(tr("Animación del Modelo"));
   QFormLayout *animLayout = new QFormLayout();
 
   m_animSelectCombo = new QComboBox();
@@ -359,6 +360,7 @@ void EntityBehaviorDialog::setupUI() {
   m_startFrameSpin = new QSpinBox();
   m_startFrameSpin->setRange(0, 9999);
   m_startFrameSpin->setValue(m_entity.startGraph);
+  m_startFrameSpin->setPrefix(""); // Clear prefix by default
   animLayout->addRow(tr("Frame Inicial:"), m_startFrameSpin);
 
   m_endFrameSpin = new QSpinBox();
@@ -376,7 +378,7 @@ void EntityBehaviorDialog::setupUI() {
   m_animationGroup->setLayout(animLayout);
   mainLayout->addWidget(m_animationGroup);
 
-  if (m_entity.type != "model") {
+  if (m_entity.type != "model" && m_entity.type != "gltf") {
     m_animationGroup->setVisible(false);
   } else {
     loadModelAnimations();
@@ -634,7 +636,7 @@ void EntityBehaviorDialog::onAccept() {
 }
 
 void EntityBehaviorDialog::loadModelAnimations() {
-  if (m_entity.type != "model")
+  if (m_entity.type != "model" && m_entity.type != "gltf")
     return;
 
   QString assetPath = m_entity.assetPath;
@@ -646,59 +648,88 @@ void EntityBehaviorDialog::loadModelAnimations() {
     fullPath = assetPath;
   }
 
-  qDebug() << "Loading MD3 for frames info:" << fullPath;
+  qDebug() << "Loading model for frames/animations info:" << fullPath;
 
-  MD3Loader loader;
-  if (loader.load(fullPath)) {
-    int totalFrames = loader.getNumFrames();
-    m_totalFramesLabel->setText(tr("Total de Frames: %1").arg(totalFrames));
-    m_startFrameSpin->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
-    m_endFrameSpin->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
+  if (m_entity.type == "model") {
+    MD3Loader loader;
+    if (loader.load(fullPath)) {
+      int totalFrames = loader.getNumFrames();
+      m_totalFramesLabel->setText(tr("Total de Frames: %1").arg(totalFrames));
+      m_startFrameSpin->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
+      m_endFrameSpin->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
 
-    // Try to find animation config: modelname.cfg first, then animation.cfg
-    QFileInfo md3Info(fullPath);
-    QString cfgPath =
-        md3Info.absolutePath() + "/" + md3Info.baseName() + ".cfg";
-    if (!QFile::exists(cfgPath)) {
-      cfgPath = md3Info.absolutePath() + "/animation.cfg";
-    }
+      // Try to find animation config: modelname.cfg first, then animation.cfg
+      QFileInfo md3Info(fullPath);
+      QString cfgPath =
+          md3Info.absolutePath() + "/" + md3Info.baseName() + ".cfg";
+      if (!QFile::exists(cfgPath)) {
+        cfgPath = md3Info.absolutePath() + "/animation.cfg";
+      }
 
-    QFile cfgFile(cfgPath);
-    if (cfgFile.open(QIODevice::ReadOnly)) {
-      QTextStream stream(&cfgFile);
-      m_animSelectCombo->clear();
-      m_animSelectCombo->addItem(tr("(Personalizado / Manual)"), -1);
-      while (!stream.atEnd()) {
-        QString line = stream.readLine().trimmed();
-        if (line.isEmpty() || line.startsWith("//"))
-          continue;
+      QFile cfgFile(cfgPath);
+      if (cfgFile.open(QIODevice::ReadOnly)) {
+        QTextStream stream(&cfgFile);
+        m_animSelectCombo->clear();
+        m_animSelectCombo->addItem(tr("(Personalizado / Manual)"), -1);
+        while (!stream.atEnd()) {
+          QString line = stream.readLine().trimmed();
+          if (line.isEmpty() || line.startsWith("//"))
+            continue;
 
-        // Format: first-frame, num-frames, looping-frames, frames-per-second
-        // Quake 3 MD3 standard
-        QStringList parts =
-            line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-        if (parts.size() >= 2) {
-          QString name = "";
-          int commentIdx = line.indexOf("//");
-          if (commentIdx != -1) {
-            name = line.mid(commentIdx + 2).trimmed();
-          } else {
-            name = tr("Anim %1").arg(m_animSelectCombo->count());
-          }
+          // Format: first-frame, num-frames, looping-frames, frames-per-second
+          // Quake 3 MD3 standard
+          QStringList parts =
+              line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+          if (parts.size() >= 2) {
+            QString name = "";
+            int commentIdx = line.indexOf("//");
+            if (commentIdx != -1) {
+              name = line.mid(commentIdx + 2).trimmed();
+            } else {
+              name = tr("Anim %1").arg(m_animSelectCombo->count());
+            }
 
-          bool ok1, ok2;
-          int first = parts[0].toInt(&ok1);
-          int length = parts[1].toInt(&ok2);
-          if (ok1 && ok2) {
-            m_animSelectCombo->addItem(name, QPoint(first, first + length - 1));
+            bool ok1, ok2;
+            int first = parts[0].toInt(&ok1);
+            int length = parts[1].toInt(&ok2);
+            if (ok1 && ok2) {
+              m_animSelectCombo->addItem(name,
+                                         QPoint(first, first + length - 1));
+            }
           }
         }
+        cfgFile.close();
       }
-      cfgFile.close();
+    } else {
+      m_totalFramesLabel->setText(
+          tr("Error cargando MD3 para lectura de frames."));
     }
-  } else {
-    m_totalFramesLabel->setText(
-        tr("Error cargando MD3 para lectura de frames."));
+  } else if (m_entity.type == "gltf") {
+    ObjToMd3Converter loader;
+    if (loader.loadGlb(fullPath)) {
+      const auto &anims = loader.glbAnimations();
+      m_totalFramesLabel->setText(tr("Animaciones GLTF: %1").arg(anims.size()));
+
+      m_animSelectCombo->clear();
+      m_animSelectCombo->addItem(tr("(Personalizado / Manual)"), -1);
+
+      for (int i = 0; i < anims.size(); ++i) {
+        QString name = anims[i].name;
+        if (name.isEmpty())
+          name = tr("Animación %1").arg(i);
+        // Store animation index in QPoint.x, and -1 in y to signal it's GLTF
+        // index
+        m_animSelectCombo->addItem(name, QPoint(i, -1));
+      }
+
+      // Adjust spinboxes for GLTF (where start is index and end is unused or
+      // 1.0)
+      m_startFrameSpin->setMaximum(anims.size() > 0 ? anims.size() - 1 : 0);
+      m_endFrameSpin->setEnabled(false);
+      m_startFrameSpin->setPrefix(tr("Index: "));
+    } else {
+      m_totalFramesLabel->setText(tr("Error cargando GLTF para animaciones."));
+    }
   }
 }
 
@@ -718,8 +749,8 @@ QString EntityBehaviorDialog::generatePreviewCode() const {
   code += QString("// Entidad: %1 (Tipo: %2)\n")
               .arg(m_entity.processName)
               .arg(m_entity.type);
-  code += QString("Process %1()\n").arg(m_entity.processName);
-  code += "Private\n";
+  code += QString("process %1()\n").arg(m_entity.processName);
+  code += "private\n";
 
   // Add private variables based on activation type
   if (m_entity.activationType == EntityInstance::ACTIVATION_ON_COLLISION) {
@@ -729,12 +760,13 @@ QString EntityBehaviorDialog::generatePreviewCode() const {
     code += QString("    int event_triggered = 0;\n");
   }
 
-  code += "Begin\n";
+  code += "begin\n";
   code += "    // Configuración inicial\n";
 
   QString actionCode = m_entity.customAction;
   if (!m_entity.behaviorGraph.nodes.isEmpty()) {
-    actionCode = ProcessGenerator::generateGraphCode(m_entity.behaviorGraph);
+    actionCode =
+        ProcessGenerator::generateGraphCode(m_entity, m_entity.behaviorGraph);
   }
 
   // Position
@@ -754,7 +786,7 @@ QString EntityBehaviorDialog::generatePreviewCode() const {
     code += "    float rot_speed = 0.08;\n";
   }
 
-  code += "\n    LOOP\n";
+  code += "\n    loop\n";
 
   // Control logic
   if (m_entity.isPlayer) {
@@ -766,10 +798,10 @@ QString EntityBehaviorDialog::generatePreviewCode() const {
     }
   }
 
-  code += "        FRAME;\n";
-  code += "    END\n";
+  code += "        frame;\n";
+  code += "    end\n";
 
-  code += "End\n";
+  code += "end\n";
 
   return code;
 }

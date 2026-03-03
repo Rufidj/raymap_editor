@@ -668,6 +668,20 @@ void GridEditor::drawSpawnFlags(QPainter &painter) {
 
   for (int i = 0; i < m_mapData->spawnFlags.size(); ++i) {
     const SpawnFlag &flag = m_mapData->spawnFlags[i];
+
+    // CRITICAL: If an entity with the same spawn_id exists, don't draw the
+    // spawn flag to avoid visual "garbage" (redundant pink squares under
+    // entities).
+    bool isEntity = false;
+    for (const EntityInstance &ent : m_mapData->entities) {
+      if (ent.spawn_id == flag.flagId) {
+        isEntity = true;
+        break;
+      }
+    }
+    if (isEntity)
+      continue;
+
     QPoint pos = worldToScreen(QPointF(flag.x, flag.y));
 
     // Highlight selected
@@ -1548,12 +1562,11 @@ void GridEditor::contextMenuEvent(QContextMenuEvent *event) {
     } else if (pasteAction && selectedItem == pasteAction) {
       pasteSelection();
     } else if (selectedItem == deleteAction) {
-      // Find and remove associated spawn flag
+      // Find and remove all associated spawn flags
       int spawnId = ent.spawn_id;
-      for (int i = 0; i < m_mapData->spawnFlags.size(); ++i) {
+      for (int i = m_mapData->spawnFlags.size() - 1; i >= 0; --i) {
         if (m_mapData->spawnFlags[i].flagId == spawnId) {
           m_mapData->spawnFlags.removeAt(i);
-          break;
         }
       }
 
@@ -2027,12 +2040,11 @@ void GridEditor::deleteSelection() {
             std::greater<int>());
   for (int idx : m_multiSelectedEntities) {
     if (idx >= 0 && idx < m_mapData->entities.size()) {
-      // Also remove associated spawn flag if any
+      // Also remove all associated spawn flags if any
       int spawnId = m_mapData->entities[idx].spawn_id;
-      for (int i = 0; i < m_mapData->spawnFlags.size(); ++i) {
+      for (int i = m_mapData->spawnFlags.size() - 1; i >= 0; --i) {
         if (m_mapData->spawnFlags[i].flagId == spawnId) {
           m_mapData->spawnFlags.removeAt(i);
-          break;
         }
       }
       m_mapData->entities.removeAt(idx);

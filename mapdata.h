@@ -220,11 +220,10 @@ struct NodePinData {
   bool isInput;
   bool isExecution;
   QString value;
-  int linkedPinId;
+  QList<int> linkedPinIds;
 
   NodePinData()
-      : pinId(-1), name(""), isInput(true), isExecution(false), value(""),
-        linkedPinId(-1) {}
+      : pinId(-1), name(""), isInput(true), isExecution(false), value("") {}
 };
 
 struct NodeData {
@@ -303,6 +302,7 @@ struct EntityInstance {
   int startGraph;
   int endGraph;
   float animSpeed;
+  float scale;
   int billboard_directions;
 
   // Physics / Collision Box (3D)
@@ -337,8 +337,8 @@ struct EntityInstance {
         cameraOffset_y(0), cameraOffset_z(0), cameraRotation(0),
         initialRotation(0), isIntro(false), npcPathId(-1), autoStartPath(false),
         snapToFloor(false), graphId(0), startGraph(0), endGraph(0),
-        animSpeed(0), billboard_directions(1), width(64), depth(64),
-        height(128), collisionEnabled(true), physicsEnabled(false),
+        animSpeed(0), scale(1.0f), billboard_directions(1), width(64),
+        depth(64), height(128), collisionEnabled(true), physicsEnabled(false),
         physicsMass(1.0f), physicsFriction(0.5f), physicsRestitution(0.3f),
         physicsGravityScale(1.0f), physicsLinearDamping(0.05f),
         physicsAngularDamping(0.1f), physicsIsStatic(false),
@@ -355,7 +355,7 @@ struct EntityInstance {
         cameraFollow(false), cameraOffset_x(0), cameraOffset_y(0),
         cameraOffset_z(0), cameraRotation(0), initialRotation(0),
         isIntro(false), npcPathId(-1), autoStartPath(false), snapToFloor(false),
-        graphId(0), startGraph(0), endGraph(0), animSpeed(0),
+        graphId(0), startGraph(0), endGraph(0), animSpeed(0), scale(1.0f),
         billboard_directions(1), width(64), depth(64), height(128),
         collisionEnabled(true), physicsEnabled(false), physicsMass(1.0f),
         physicsFriction(0.5f), physicsRestitution(0.3f),

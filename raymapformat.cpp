@@ -59,8 +59,8 @@ bool RayMapFormat::loadMap(
   }
 
   /* Verify version */
-  if (version < 8 || version > 30) {
-    qWarning() << "Versión no soportada:" << version << "(solo v8-v30)";
+  if (version < 8 || version > 31) {
+    qWarning() << "Versión no soportada:" << version << "(solo v8-v31)";
     file.close();
     return false;
   }
@@ -507,8 +507,28 @@ bool RayMapFormat::loadMap(
             valBytes.resize(valLen);
             in.readRawData(valBytes.data(), valLen);
             pin.value = QString::fromUtf8(valBytes);
-            in.readRawData(reinterpret_cast<char *>(&pin.linkedPinId),
-                           sizeof(int32_t));
+
+            // Read links (handle list or single int for backward compatibility)
+            int32_t numLinks = 1;
+            // Version 31+ will store list size, earlier versions just one int
+            // For now, let's keep it simple: if version < 31, read one.
+            // If we want to support it now, we check version or just assume
+            // it's one for now. Let's use version 31 as the pivot.
+            if (version >= 31) {
+              in.readRawData(reinterpret_cast<char *>(&numLinks),
+                             sizeof(int32_t));
+              for (int k = 0; k < numLinks; ++k) {
+                int32_t lid;
+                in.readRawData(reinterpret_cast<char *>(&lid), sizeof(int32_t));
+                if (lid != -1)
+                  pin.linkedPinIds.append(lid);
+              }
+            } else {
+              int32_t lid;
+              in.readRawData(reinterpret_cast<char *>(&lid), sizeof(int32_t));
+              if (lid != -1)
+                pin.linkedPinIds.append(lid);
+            }
             node.pins.append(pin);
           }
           entity.behaviorGraph.nodes.append(node);
@@ -708,7 +728,7 @@ bool RayMapFormat::saveMap(
   }
   // --------------------------------------------
 
-  const uint32_t version = 30; /* v30: Behavior Nodes */
+  const uint32_t version = 31; /* v31: Behavior Nodes with Multi-Link Output */
                                // v29: Physics Engine
                                // v24: Normals, v25: Lights, v26: Fluid Params,
                                // v27: Liquid Speed, v28: Fog
@@ -936,8 +956,19 @@ bool RayMapFormat::saveMap(
 
   /* Write spawn flags (including entities) */
   // First write regular spawn flags (Legacy 16-byte format for engine
-  // compatibility)
+  // compatibility) CRITICAL: Filter out flags that are already in the entities
+  // list to avoid duplication
   for (const SpawnFlag &flag : mapData.spawnFlags) {
+    bool isEntity = false;
+    for (const EntityInstance &ent : mapData.entities) {
+      if (ent.spawn_id == flag.flagId) {
+        isEntity = true;
+        break;
+      }
+    }
+    if (isEntity)
+      continue; // Skip, it will be written in the next loop
+
     out.writeRawData(reinterpret_cast<const char *>(&flag.flagId), sizeof(int));
     out.writeRawData(reinterpret_cast<const char *>(&flag.x), sizeof(float));
     out.writeRawData(reinterpret_cast<const char *>(&flag.y), sizeof(float));
@@ -1119,8 +1150,15 @@ bool RayMapFormat::saveMap(
           out.writeRawData(reinterpret_cast<const char *>(&pinValLen),
                            sizeof(uint32_t));
           out.writeRawData(pinValBytes.data(), pinValLen);
-          out.writeRawData(reinterpret_cast<const char *>(&pin.linkedPinId),
+          // Write links (size + ids)
+          int32_t numLinks = pin.linkedPinIds.size();
+          out.writeRawData(reinterpret_cast<const char *>(&numLinks),
                            sizeof(int32_t));
+          for (int lid : pin.linkedPinIds) {
+            int32_t lid32 = lid;
+            out.writeRawData(reinterpret_cast<const char *>(&lid32),
+                             sizeof(int32_t));
+          }
         }
       }
       out.writeRawData(

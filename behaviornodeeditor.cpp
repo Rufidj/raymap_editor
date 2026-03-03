@@ -52,14 +52,14 @@ void BehaviorPinItem::paint(QPainter *painter,
     // Draw triangle for execution pins
     QPolygonF poly;
     poly << QPointF(-5, -6) << QPointF(-5, 6) << QPointF(6, 0);
-    painter->setBrush(m_data->linkedPinId != -1 ? QBrush(Qt::white)
-                                                : QBrush(Qt::NoBrush));
+    painter->setBrush(!m_data->linkedPinIds.isEmpty() ? QBrush(Qt::white)
+                                                      : QBrush(Qt::NoBrush));
     painter->setPen(QPen(Qt::white, 2));
     painter->drawPolygon(poly);
   } else {
     // Draw circle for data pins
-    painter->setBrush(m_data->linkedPinId != -1 ? brush()
-                                                : QBrush(Qt::NoBrush));
+    painter->setBrush(!m_data->linkedPinIds.isEmpty() ? brush()
+                                                      : QBrush(Qt::NoBrush));
     painter->setPen(QPen(brush().color(), 2));
     painter->drawEllipse(-5, -5, 10, 10);
   }
@@ -191,7 +191,7 @@ void BehaviorNodeItem::paint(QPainter *painter,
     float yPos = 30 + i * 20;
     if (p->isInput) {
       QString label = p->name;
-      if (!p->isExecution && p->linkedPinId == -1 && !p->value.isEmpty()) {
+      if (!p->isExecution && p->linkedPinIds.isEmpty() && !p->value.isEmpty()) {
         label += " [" + p->value + "]";
       }
       painter->drawText(QRectF(12, yPos - 10, m_width - 24, 20),
@@ -308,9 +308,7 @@ void BehaviorNodeScene::deleteNode(BehaviorNodeItem *item) {
 void BehaviorNodeScene::removePinLinks(int pinId) {
   for (NodeData &node : m_graph.nodes) {
     for (NodePinData &pin : node.pins) {
-      if (pin.linkedPinId == pinId) {
-        pin.linkedPinId = -1;
-      }
+      pin.linkedPinIds.removeOne(pinId);
     }
   }
 }
@@ -768,6 +766,94 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     data.pins.append(pFile);
     data.pins.append(pMinVol);
     data.pins.append(pMaxVol);
+  } else if (type == "action_set_animation") {
+    NodePinData pIn, pOut, pStart, pEnd, pSpeed;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pStart.pinId = m_graph.nextPinId++;
+    pStart.name = "Start Frame";
+    pStart.isInput = true;
+    pStart.value = "0";
+    pEnd.pinId = m_graph.nextPinId++;
+    pEnd.name = "End Frame";
+    pEnd.isInput = true;
+    pEnd.value = "10";
+    pSpeed.pinId = m_graph.nextPinId++;
+    pSpeed.name = "Speed";
+    pSpeed.isInput = true;
+    pSpeed.value = "1.0";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pStart);
+    data.pins.append(pEnd);
+    data.pins.append(pSpeed);
+  } else if (type == "action_set_glb_animation") {
+    NodePinData pIn, pOut, pIdx, pSpeed;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pIdx.pinId = m_graph.nextPinId++;
+    pIdx.name = "Anim Index";
+    pIdx.isInput = true;
+    pIdx.value = "0";
+    pSpeed.pinId = m_graph.nextPinId++;
+    pSpeed.name = "Speed";
+    pSpeed.isInput = true;
+    pSpeed.value = "1.0";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pIdx);
+    data.pins.append(pSpeed);
+  } else if (type == "action_set_path_active") {
+    NodePinData pIn, pOut, pActive;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pActive.pinId = m_graph.nextPinId++;
+    pActive.name = "Active (0/1)";
+    pActive.isInput = true;
+    pActive.value = "0";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pActive);
+  } else if (type == "action_npc_chase") {
+    NodePinData pIn, pOut, pTarget, pSpeed;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pTarget.pinId = m_graph.nextPinId++;
+    pTarget.name = "Target ID";
+    pTarget.isInput = true;
+    pTarget.value = "get_id(type player)";
+    pSpeed.pinId = m_graph.nextPinId++;
+    pSpeed.name = "Speed";
+    pSpeed.isInput = true;
+    pSpeed.value = "5.0";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pTarget);
+    data.pins.append(pSpeed);
   }
 
   m_graph.nodes.append(data);
@@ -791,12 +877,14 @@ void BehaviorNodeScene::updateLinks() {
 
   for (auto nodeItem : m_nodeItems) {
     for (auto pinItem : nodeItem->pins()) {
-      if (!pinItem->data()->isInput && pinItem->data()->linkedPinId != -1) {
-        if (pinMap.contains(pinItem->data()->linkedPinId)) {
-          BehaviorLinkItem *link = new BehaviorLinkItem(
-              pinItem, pinMap[pinItem->data()->linkedPinId]);
-          addItem(link);
-          m_linkItems.append(link);
+      if (!pinItem->data()->isInput) {
+        for (int linkedId : pinItem->data()->linkedPinIds) {
+          if (pinMap.contains(linkedId)) {
+            BehaviorLinkItem *link =
+                new BehaviorLinkItem(pinItem, pinMap[linkedId]);
+            addItem(link);
+            m_linkItems.append(link);
+          }
         }
       }
     }
@@ -847,8 +935,26 @@ void BehaviorNodeScene::mouseReleaseEvent(QGraphicsSceneMouseEvent *event) {
       BehaviorPinItem *inputPin =
           m_dragStartPin->data()->isInput ? m_dragStartPin : endPin;
 
-      outputPin->data()->linkedPinId = inputPin->data()->pinId;
-      inputPin->data()->linkedPinId = outputPin->data()->pinId;
+      // Map to find pins by ID
+      QMap<int, BehaviorPinItem *> pinMap;
+      for (auto nodeItem : m_nodeItems) {
+        for (auto pinItem : nodeItem->pins()) {
+          pinMap[pinItem->data()->pinId] = pinItem;
+        }
+      }
+
+      // Input pins can only have ONE incoming link - clear previous if exists
+      if (!inputPin->data()->linkedPinIds.isEmpty()) {
+        int oldOutId = inputPin->data()->linkedPinIds.first();
+        if (pinMap.contains(oldOutId)) {
+          pinMap[oldOutId]->data()->linkedPinIds.removeOne(
+              inputPin->data()->pinId);
+        }
+        inputPin->data()->linkedPinIds.clear();
+      }
+
+      outputPin->data()->linkedPinIds.append(inputPin->data()->pinId);
+      inputPin->data()->linkedPinIds.append(outputPin->data()->pinId);
 
       updateLinks();
     }
@@ -908,6 +1014,12 @@ void BehaviorNodeScene::contextMenuEvent(
   actions->addAction("Mover A", [this, event]() {
     addNode("action_moveto", event->scenePos());
   });
+  actions->addAction("Cambiar Animación (MD3)", [this, event]() {
+    addNode("action_set_animation", event->scenePos());
+  });
+  actions->addAction("Cambiar Animación (GLB/GLTF)", [this, event]() {
+    addNode("action_set_glb_animation", event->scenePos());
+  });
   actions->addAction("Reproducir Sonido", [this, event]() {
     addNode("action_sound", event->scenePos());
   });
@@ -928,6 +1040,13 @@ void BehaviorNodeScene::contextMenuEvent(
   });
   actions->addAction("Cambiar Texto UI", [this, event]() {
     addNode("action_set_ui_text", event->scenePos());
+  });
+  actions->addSeparator();
+  actions->addAction("Activar/Desactivar Ruta NPC", [this, event]() {
+    addNode("action_set_path_active", event->scenePos());
+  });
+  actions->addAction("Perseguir Objetivo (NPC)", [this, event]() {
+    addNode("action_npc_chase", event->scenePos());
   });
 
   QMenu *logic = menu.addMenu("Lógica");

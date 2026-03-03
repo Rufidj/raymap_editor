@@ -10,6 +10,7 @@
 #include <QVector>
 #include <QtGlobal>
 #include <cmath>
+#include <functional>
 
 QString ProcessGenerator::generateProcessCode(const QString &processName,
                                               const QString &assetPath,
@@ -35,11 +36,28 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
     out << "    double world_x, world_y, world_z;\n";
     out << "    double rotation;\n";
     out << "    double scale;\n";
+    out << "    // AI and Combat Variables\n";
+    out << "    int s_id;\n";
+    out << "    double d_dist;\n";
+    out << "    int behavior_timer;\n";
+    out << "    int current_anim_start, current_anim_end, "
+           "current_anim_speed;\n";
+    out << "    int anim_current_frame, anim_next_frame;\n";
+    out << "    float anim_interpolation;\n";
+    out << "    int npc_path_active;\n";
     out << "begin\n";
     out << "    model_id = 0;\n";
     out << "    texture_id = 0;\n";
     out << "    rotation = 0.0;\n";
     out << "    scale = 1.0;\n";
+    out << "    s_id = 0;\n";
+    out << "    d_dist = 0.0;\n";
+    out << "    behavior_timer = 0;\n";
+    out << "    current_anim_start = -1; current_anim_end = -1;\n";
+    out << "    current_anim_speed = 0;\n";
+    out << "    anim_current_frame = 0; anim_next_frame = 0;\n";
+    out << "    anim_interpolation = 0.0;\n";
+    out << "    npc_path_active = 1;\n";
     out << "    \n";
     out << "    // Get spawn position from flag\n";
     out << "    world_x = RAY_GET_FLAG_X(spawn_id);\n";
@@ -316,7 +334,7 @@ QString ProcessGenerator::generateDeclarationsSection(
         entity.processName + "_" + QString::number(entity.spawn_id);
     if (!declaredNames.contains(uniqueName.toLower())) {
       declaredNames.insert(uniqueName.toLower());
-      out << "DECLARE PROCESS " << uniqueName
+      out << "declare process " << uniqueName
           << "(int param_x, int param_y, int param_z, int param_angle);\n";
     }
   }
@@ -350,7 +368,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
   out << "    double world_x; double world_y; double world_z; double "
          "world_angle;\n";
 
-  if (entity.type == "model") {
+  if (entity.type == "model" || entity.type == "gltf") {
     out << "    int model_id;\n";
     out << "    int texture_id;\n";
     out << "    int sprite_id;\n";
@@ -359,16 +377,16 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    double anim_interpolation;\n";
     out << "    int anim_current_frame;\n";
     out << "    int anim_next_frame;\n";
+    out << "    int current_anim_start;\n";
+    out << "    int current_anim_end;\n";
+    out << "    double current_anim_speed;\n";
   } else if (entity.type == "campath") {
     out << "    int campath_id;\n";
   }
 
   // Behavior-specific variables (always present for sound/engine actions)
   out << "    int car_engine_id;\n";
-  if (entity.activationType == EntityInstance::ACTIVATION_ON_COLLISION) {
-    out << "    int collision_target;\n";
-    out << "    int collision_detected;\n";
-  } else if (entity.activationType == EntityInstance::ACTIVATION_ON_EVENT) {
+  if (entity.activationType == EntityInstance::ACTIVATION_ON_EVENT) {
     out << "    int event_triggered;\n";
   }
 
@@ -378,7 +396,6 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    double rot_speed;\n";
     out << "    double player_angle;\n";
     out << "    double turn_offset;\n";
-    out << "    double dx, dy;\n";
     out << "    double angle_milis_car;\n";
     out << "    double speed;\n";
   }
@@ -395,12 +412,12 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    double angle_milis;\n";
   }
 
-  // NPC Path variables (Declaration only)
   if (entity.npcPathId >= 0) {
     out << "    // NPC Path following variables\n";
     out << "    int npc_current_waypoint;\n";
     out << "    int npc_wait_counter;\n";
     out << "    int npc_direction; // For ping-pong mode\n";
+    out << "    int npc_path_active;\n";
   }
 
   // Utility variables for asset loading and behavior
@@ -409,27 +426,40 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
   out << "    int s_id;\n";
   out << "    int cur_speed;\n";
   out << "    int speed_vol;\n";
+  out << "    int collision_target;\n";
+  out << "    int collision_detected;\n";
+  out << "    double dx, dy, dz, d_dist;\n";
+  out << "    double angle_to_target;\n";
+  out << "    int behavior_timer;\n";
 
   out << "begin\n";
   out << "    car_engine_id = 0;\n";
-  if (entity.type == "model") {
+  if (entity.type == "model" || entity.type == "gltf") {
     out << "    model_id = 0;\n";
     out << "    texture_id = 0;\n";
     out << "    sprite_id = -1;\n";
     out << "    rotation = 0.0;\n";
-    out << "    scale = 1.0;\n";
+    out << "    scale = " << entity.scale << ";\n";
     out << "    anim_interpolation = 0.0;\n";
-    out << "    anim_current_frame = " << entity.startGraph << ";\n";
-    out << "    anim_next_frame = "
-        << (entity.endGraph > entity.startGraph ? entity.startGraph + 1
-                                                : entity.startGraph)
-        << ";\n";
+    out << "    current_anim_start = " << entity.startGraph << ";\n";
+    out << "    current_anim_end = " << entity.endGraph << ";\n";
+    out << "    current_anim_speed = " << entity.animSpeed << ";\n";
+    out << "    anim_current_frame = current_anim_start;\n";
+    out << "    anim_next_frame = current_anim_start + 1;\n";
+    out << "    if (anim_next_frame > current_anim_end) anim_next_frame = "
+           "current_anim_start; end\n";
   } else if (entity.type == "campath") {
     out << "    campath_id = 0;\n";
   }
 
   if (entity.activationType == EntityInstance::ACTIVATION_ON_COLLISION) {
-    out << "    collision_target = " << entity.collisionTarget << ";\n";
+    QString target = entity.collisionTarget;
+    if (target == "TYPE_PLAYER" && !playerTypeName.isEmpty()) {
+      target = "type " + playerTypeName;
+    } else if (target.toLower() == "player" && !playerTypeName.isEmpty()) {
+      target = "type " + playerTypeName;
+    }
+    out << "    collision_target = " << target << ";\n";
     out << "    collision_detected = 0;\n";
   } else if (entity.activationType == EntityInstance::ACTIVATION_ON_EVENT) {
     out << "    event_triggered = 0;\n";
@@ -449,6 +479,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    npc_current_waypoint = 0;\n";
     out << "    npc_wait_counter = 0;\n";
     out << "    npc_direction = 1;\n";
+    out << "    npc_path_active = 1;\n";
   }
 
   out << "    world_x = param_x; world_y = param_y;\n";
@@ -537,8 +568,32 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
       out << "    RAY_SET_SPRITE_ANIM(sprite_id, " << entity.startGraph << ", "
           << entity.endGraph << ", 0.0);\n";
     }
-    out << "    \n";
+  } else if (entity.type == "gltf") {
+    QString cleanPath = entity.assetPath;
+    if (cleanPath.contains("/assets/")) {
+      cleanPath = cleanPath.mid(cleanPath.indexOf("assets/"));
+    } else if (cleanPath.contains("\\assets\\")) {
+      cleanPath = cleanPath.mid(cleanPath.indexOf("assets\\"));
+    }
 
+    out << "    // Load GLTF/GLB Model\n";
+    out << "    model_id = RAY_LOAD_GLTF(" << wrapperOpen << "\"" << cleanPath
+        << "\"" << wrapperClose << ");\n";
+    out << "    if (model_id == 0) say(\"[" << entity.processName
+        << "] ERROR: Failed to load GLTF: " << cleanPath << "\"); end\n";
+
+    out << "    // Create sprite\n";
+    out << "    sprite_id = RAY_ADD_SPRITE(world_x, world_y, world_z, 0, 0, "
+           "64, 64, 0);\n";
+    out << "    if (sprite_id >= 0)\n";
+    out << "        RAY_SET_SPRITE_GLTF(sprite_id, model_id);\n";
+    out << "        RAY_SET_SPRITE_SCALE(sprite_id, scale);\n";
+    out << "        RAY_SET_SPRITE_ANGLE(sprite_id, param_angle);\n";
+    out << "    end\n";
+  }
+
+  // Common properties for all models (MD3 and GLTF)
+  if (entity.type == "model" || entity.type == "gltf") {
     // Visibility
     if (!entity.isVisible) {
       out << "    // Entity is invisible\n";
@@ -653,17 +708,20 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
 
   // Use Behavior Graph if it has nodes
   if (!entity.behaviorGraph.nodes.isEmpty()) {
-    actionCode = generateGraphCode(entity.behaviorGraph, "event_start");
+    actionCode = ProcessGenerator::generateGraphCode(
+        entity, entity.behaviorGraph, "event_start", playerTypeName);
   }
 
   QString updateCode;
   if (!entity.behaviorGraph.nodes.isEmpty()) {
-    updateCode = generateGraphCode(entity.behaviorGraph, "event_update");
+    updateCode = ProcessGenerator::generateGraphCode(
+        entity, entity.behaviorGraph, "event_update", playerTypeName);
   }
 
   QString collisionCode;
   if (!entity.behaviorGraph.nodes.isEmpty()) {
-    collisionCode = generateGraphCode(entity.behaviorGraph, "event_collision");
+    collisionCode = ProcessGenerator::generateGraphCode(
+        entity, entity.behaviorGraph, "event_collision", playerTypeName);
   }
 
   switch (entity.activationType) {
@@ -859,47 +917,57 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
       out << "        end\n";
     }
 
-    if (entity.npcPathId >= 0 && entity.autoStartPath) {
-      out << "        // Automatic NPC Path Following\n";
-      out << "        npc_follow_path(" << entity.npcPathId
-          << ", &npc_current_waypoint, &npc_wait_counter, &npc_direction, "
-             "&world_x, &world_y, &world_z, &world_angle);\n";
-    } else if (entity.snapToFloor) {
+    if (entity.snapToFloor && (entity.npcPathId < 0 || !entity.autoStartPath)) {
       out << "        // Snap to floor for non-path entities\n";
-      out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y) + "
-             "5.0;\n";
+      out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
     }
 
-    // Behavior graph update code
+    if (entity.npcPathId >= 0) {
+      out << "        // Automatic NPC Path Following\n";
+      out << "        if (npc_path_active == 1)\n";
+      out << "            npc_follow_path(" << entity.npcPathId
+          << ", &npc_current_waypoint, &npc_wait_counter, &npc_direction, "
+             "&world_x, &world_y, &world_z, &world_angle, "
+          << (entity.snapToFloor ? "1" : "0") << ");\n";
+      out << "        else\n";
+      out << "            // if (entity.isPlayer == 0) say(\"Entity \" + name "
+             "+ \" path inactive\"); end\n";
+      out << "        end\n";
+    }
+
+    out << "        if (behavior_timer > 0) behavior_timer = behavior_timer - "
+           "1; end\n";
+
     if (!updateCode.isEmpty()) {
       out << "        // Behavior Update (Each Frame)\n";
       out << "        " << updateCode.replace("\n", "\n        ") << "\n";
     }
 
-    out << "        x = world_x; y = world_y; z = world_z;\n";
-    if (entity.type == "model") {
+    if (entity.type == "model" || entity.type == "gltf") {
+      out << "        x = world_x; y = world_y; z = world_z;\n";
       out << "        RAY_UPDATE_SPRITE_POSITION(sprite_id, world_x, world_y, "
              "world_z);\n";
       out << "        RAY_SET_SPRITE_ANGLE(sprite_id, world_angle * "
-             "57.2957);\n"; // Radians to Degrees
-      if (entity.animSpeed != 0) {
-        out << "        // Smooth Animation Loop\n";
-        out << "        anim_interpolation = anim_interpolation + "
-            << (qAbs(entity.animSpeed) / 60.0f) << ";\n";
-        out << "        if (anim_interpolation >= 1.0)\n";
-        out << "            begin\n";
+             "57.2957);\n";
+
+      out << "        // Animation Logic\n";
+      if (entity.type == "model") {
+        out << "        if (current_anim_speed != 0)\n";
+        out << "            anim_interpolation = anim_interpolation + "
+               "(abs(current_anim_speed) / 60.0);\n";
+        out << "            if (anim_interpolation >= 1.0)\n";
         out << "                anim_interpolation = 0.0;\n";
         out << "                anim_current_frame = anim_next_frame;\n";
         out << "                anim_next_frame = anim_current_frame + 1;\n";
-        out << "                if (anim_next_frame > " << entity.endGraph
-            << ") anim_next_frame = " << entity.startGraph << "; end\n";
+        out << "                if (anim_next_frame > current_anim_end) "
+               "anim_next_frame = current_anim_start; end\n";
         out << "            end\n";
         out << "        end\n";
         out << "        RAY_SET_SPRITE_ANIM(sprite_id, anim_current_frame, "
                "anim_next_frame, anim_interpolation);\n";
       } else {
-        out << "        RAY_SET_SPRITE_ANIM(sprite_id, anim_current_frame, "
-               "anim_current_frame, 0.0);\n";
+        out << "        RAY_SET_SPRITE_GLB_ANIM(sprite_id, current_anim_start, "
+               "anim_interpolation);\n";
       }
     }
 
@@ -1035,16 +1103,35 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   }
   out << "end\n\n";
 
+  // Helper functions for NPC behavior (Safe from "Process 0 not active" errors)
+  out << "// Safe property access helpers\n";
+  out << "function float get_val_x(int _id) begin if (exists(_id)) return "
+         "_id.x; end return 0.0; end\n";
+  out << "function float get_val_y(int _id) begin if (exists(_id)) return "
+         "_id.y; end return 0.0; end\n";
+  out << "function float get_val_z(int _id) begin if (exists(_id)) return "
+         "_id.z; end return 0.0; end\n\n";
+
+  out << "// Safe 3D Distance calculation\n";
+  out << "function float get_dist_3d(int id1, int id2)\n";
+  out << "begin\n";
+  out << "    if (not exists(id1) or not exists(id2)) return 999999.0; end\n";
+  out << "    return sqrt(pow(get_val_x(id1)-get_val_x(id2),2) + "
+         "pow(get_val_y(id1)-get_val_y(id2),2) + "
+         "pow((get_val_z(id1)-get_val_z(id2))/16.0,2));\n";
+  out << "end\n\n";
+
   // Helper function to follow a path - ALWAYS present to avoid undefined
   // procedure errors
   out << "// NPC Path Following Helper\n";
   out << "function npc_follow_path(int path_id, int pointer current_wp, int "
          "pointer wait_counter, int pointer direction, double pointer cur_x, "
          "double pointer cur_y, double pointer cur_z, double pointer "
-         "cur_angle)\n";
+         "cur_angle, int snap_to_floor)\n";
   out << "private\n";
   out << "  int waypoint_count;\n";
   out << "  int loop_mode;\n";
+  out << "  int wp_idx;\n";
   out << "  double target_x, target_y, target_z;\n";
   out << "  double speed;\n";
   out << "  int wait_time;\n";
@@ -1065,25 +1152,23 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
       out << "    case " << path.path_id << ":\n";
       out << "      waypoint_count = npc_path_" << path.path_id << "_count;\n";
       out << "      loop_mode = npc_path_" << path.path_id << "_loop_mode;\n";
-      out << "      if (*current_wp >= 0 and *current_wp < waypoint_count)\n";
+      out << "      wp_idx = *current_wp;\n";
+      out << "      if (wp_idx >= 0 and wp_idx < waypoint_count)\n";
       out << "        target_x = npc_path_" << path.path_id
-          << "_waypoints[*current_wp][0] / 1000.0;\n";
+          << "_waypoints[wp_idx][0] / 1000.0;\n";
       out << "        target_y = npc_path_" << path.path_id
-          << "_waypoints[*current_wp][1] / 1000.0;\n";
+          << "_waypoints[wp_idx][1] / 1000.0;\n";
       out << "        target_z = npc_path_" << path.path_id
-          << "_waypoints[*current_wp][2] / 1000.0;\n";
+          << "_waypoints[wp_idx][2] / 1000.0;\n";
       out << "        speed = npc_path_" << path.path_id
-          << "_waypoints[*current_wp][3] / 1000.0;\n";
+          << "_waypoints[wp_idx][3] / 1000.0;\n";
       out << "        wait_time = npc_path_" << path.path_id
-          << "_waypoints[*current_wp][4];\n";
+          << "_waypoints[wp_idx][4];\n";
       out << "        look_angle = npc_path_" << path.path_id
-          << "_waypoints[*current_wp][5] / 1000.0;\n";
+          << "_waypoints[wp_idx][5] / 1000.0;\n";
       out << "      end\n";
       out << "    end\n";
     }
-    out << "    default:\n";
-    out << "      return;\n";
-    out << "    end\n";
     out << "  end\n\n";
   } else {
     out << "  return;\n";
@@ -1117,27 +1202,41 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   out << "    *cur_y = *cur_y + (dy * speed / d_dist);\n";
   out << "    // Smooth Z Z-climb vs floor sensing\n";
   out << "    dz = target_z - *cur_z;\n";
-  out << "    if (target_z <= 1.0)\n";
-  out << "        *cur_z = RAY_GET_FLOOR_HEIGHT(*cur_x, *cur_y) + 5.0;\n";
+  out << "    if (snap_to_floor != 0 or target_z <= 1.0)\n";
+  out << "        *cur_z = RAY_GET_FLOOR_HEIGHT(*cur_x, *cur_y);\n";
   out << "    elseif (dz > 1.0 or dz < -1.0)\n";
   out << "        *cur_z = *cur_z + (dz * 0.1);\n";
   out << "    else\n";
   out << "        *cur_z = target_z;\n";
   out << "    end\n\n";
 
-  out << "    if (look_angle > -900000.0) // Waypoint angle override\n";
-  out << "        *cur_angle = look_angle * 0.01745329;\n";
-  out << "    elseif (d_dist > 20.0) // 20-unit deadzone for rotation\n";
-  out << "        *cur_angle = atan2(dy, dx) * 0.00001745329;\n";
+  out << "    // Smooth Rotation Logic\n";
+  out << "    if (look_angle > -0.9) // If look_angle is set (not the -1.0 "
+         "magic value)\n";
+  out << "        dx = look_angle * 0.01745329; // Degrees to Radians\n";
+  out << "    elseif (d_dist > 5.0)\n";
+  out << "        dx = atan2(dy, dx) * 0.01745329; // Degrees to Radians\n";
+  out << "    else\n";
+  out << "        dx = *cur_angle;\n";
   out << "    end\n";
+  out << "    \n";
+  out << "    // Correct angular difference for smooth Lerp (handles 0-360 "
+         "wrap)\n";
+  out << "    dy = dx - *cur_angle; \n";
+  out << "    while (dy > 3.14159) dy = dy - 6.28318; end\n";
+  out << "    while (dy < -3.14159) dy = dy + 6.28318; end\n";
+  out << "    *cur_angle = *cur_angle + (dy * 0.15); // Smooth turn (15% per "
+         "frame)\n";
   out << "  end\n";
   out << "end\n";
 
   return code;
 }
 
-QString ProcessGenerator::generateGraphCode(const BehaviorGraph &graph,
-                                            const QString &eventType) {
+QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
+                                            const BehaviorGraph &graph,
+                                            const QString &eventType,
+                                            const QString &playerTypeName) {
   if (graph.nodes.isEmpty())
     return "";
 
@@ -1153,27 +1252,30 @@ QString ProcessGenerator::generateGraphCode(const BehaviorGraph &graph,
     }
   }
 
-  // Resolver helper
   struct Resolver {
     const QMap<int, const NodePinData *> &pm;
     const QMap<int, const NodeData *> &ptnm;
+    const QString &playerProcessName;
 
     QString resolve(int pinId) const {
       const NodePinData *pin = pm.value(pinId, nullptr);
       if (!pin)
         return "0";
-      if (pin->linkedPinId != -1) {
-        const NodePinData *linkedPin = pm.value(pin->linkedPinId, nullptr);
+
+      if (!pin->linkedPinIds.isEmpty()) {
+        const NodePinData *linkedPin =
+            pm.value(pin->linkedPinIds.first(), nullptr);
         if (linkedPin) {
           const NodeData *srcNode = ptnm.value(linkedPin->pinId, nullptr);
           if (srcNode) {
-            if (srcNode->type == "math_dist") {
-              return QString("RAY_GET_DIST(%1, %2)")
-                  .arg(resolve(srcNode->pins[0].pinId))
-                  .arg(resolve(srcNode->pins[1].pinId));
-            } else if (srcNode->type == "math_camera_dist") {
-              return QString("RAY_GET_CAMERA_DIST(%1)")
-                  .arg(resolve(srcNode->pins[0].pinId));
+            if (srcNode->type == "math_dist" ||
+                srcNode->type == "math_camera_dist") {
+              QString target = (srcNode->type == "math_dist")
+                                   ? resolve(srcNode->pins[1].pinId)
+                                   : "TYPE_PLAYER";
+              if (target == "TYPE_PLAYER" && !playerProcessName.isEmpty())
+                target = "get_id(type " + playerProcessName + ")";
+              return QString("get_dist_3d(id, %1)").arg(target);
             } else if (srcNode->type == "math_point_dist") {
               return QString("RAY_GET_POINT_DIST(%1, %2, %3, %4, %5, %6)")
                   .arg(resolve(srcNode->pins[0].pinId))
@@ -1199,105 +1301,141 @@ QString ProcessGenerator::generateGraphCode(const BehaviorGraph &graph,
           }
         }
       }
-      return pin->value;
+
+      QString val = pin->value;
+      if (!playerProcessName.isEmpty()) {
+        QString lowerPlayerProc = playerProcessName.toLower();
+        // Only replace if it doesn't already look like it's been resolved
+        if (!val.toLower().contains(lowerPlayerProc)) {
+          val.replace("TYPE_PLAYER", "get_id(type " + playerProcessName + ")",
+                      Qt::CaseInsensitive);
+          val.replace("type player", "type " + playerProcessName,
+                      Qt::CaseInsensitive);
+          if (val.toLower() == "player" || val.toLower() == "target")
+            val = "get_id(type " + playerProcessName + ")";
+        }
+      }
+      return val.isEmpty() ? "0" : val;
     }
-  } res = {pinMap, pinToNodeMap};
+  } res = {pinMap, pinToNodeMap, playerTypeName};
 
   QString code;
   QTextStream out(&code);
-  const NodeData *current = nullptr;
-  for (const auto &node : graph.nodes) {
-    if (node.type == eventType) {
-      current = &node;
-      break;
-    }
-  }
 
-  QSet<int> visited;
-  while (current) {
-    if (visited.contains(current->nodeId))
-      break;
+  std::function<void(const NodeData *, int, QSet<int> &)> generateFlow;
+  generateFlow = [&](const NodeData *current, int indent, QSet<int> &visited) {
+    if (!current || visited.contains(current->nodeId))
+      return;
     visited.insert(current->nodeId);
+    QString ind = QString(indent, ' ');
 
     if (current->type == "action_say") {
-      out << "        say(" << res.resolve(current->pins[2].pinId) << ");\n";
+      out << ind << "say(" << res.resolve(current->pins[2].pinId) << ");\n";
     } else if (current->type == "action_kill") {
-      out << "        signal(" << res.resolve(current->pins[1].pinId)
+      out << ind << "signal(" << res.resolve(current->pins[1].pinId)
           << ", s_kill);\n";
     } else if (current->type == "action_moveto") {
       QString tx = res.resolve(current->pins[2].pinId);
       QString ty = res.resolve(current->pins[3].pinId);
-      out << "        RAY_UPDATE_SPRITE_POSITION(sprite_id, " << tx << ", "
-          << ty << ", world_z);\n";
-      out << "        world_x = " << tx << "; world_y = " << ty << ";\n";
+      out << ind << " world_x = " << tx << "; world_y = " << ty << ";\n";
+      out << ind
+          << " RAY_UPDATE_SPRITE_POSITION(sprite_id, world_x, world_y, "
+             "world_z);\n";
     } else if (current->type == "action_sound") {
       QString file = res.resolve(current->pins[2].pinId);
-      QString vol = res.resolve(current->pins[3].pinId);
       QString loops = res.resolve(current->pins[4].pinId);
-      out << "        {\n";
-      out << "            s_id = SOUND_LOAD(\"" << file << "\");\n";
-      out << "            if (s_id > 0)\n";
-      out << "                SOUND_SET_POSITION(s_id, world_x, world_y);\n";
-      out << "                SOUND_SET_VOLUME(s_id, " << vol << ");\n";
-      out << "                SOUND_PLAY(s_id, " << loops << ");\n";
-      out << "            end\n";
-      out << "        }\n";
-    } else if (current->type == "action_shake_camera") {
-      QString intensity = res.resolve(current->pins[2].pinId);
-      QString duration = res.resolve(current->pins[3].pinId);
-      out << "        // Camera Shake: Intensity=" << intensity
-          << " Duration=" << duration << "\n";
-      out << "        cam_shake_intensity = " << intensity << ";\n";
-      out << "        cam_shake_timer = " << duration
-          << " * 60; // Assume 60fps\n";
-    } else if (current->type == "action_spawn_billboard") {
-      QString file = res.resolve(current->pins[2].pinId);
-      QString gStart = res.resolve(current->pins[3].pinId);
-      QString gEnd = res.resolve(current->pins[4].pinId);
-      QString speed = res.resolve(current->pins[5].pinId);
-      QString scale = res.resolve(current->pins[6].pinId);
-      out << "        Billboard_Effect_Process(world_x, world_y, world_z, "
-          << file << ", " << gStart << ", " << gEnd << ", " << speed << ", "
-          << scale << ");\n";
-    } else if (current->type == "action_car_engine") {
-      QString file = res.resolve(current->pins[2].pinId);
-      QString minVol = res.resolve(current->pins[3].pinId);
-      QString maxVol = res.resolve(current->pins[4].pinId);
-      out << "        if (car_engine_id <= 0)\n";
-      out << "            car_engine_id = SOUND_LOAD(\"" << file << "\");\n";
-      out << "            if (car_engine_id > 0) SOUND_PLAY(car_engine_id, "
-             "-1); end\n";
-      out << "        end\n";
-      out << "        if (car_engine_id > 0)\n";
-      out << "            cur_speed = abs(speed);\n";
-      out << "            speed_vol = " << minVol << " + (cur_speed * ("
-          << maxVol << " - " << minVol << ") / 10.0);\n";
-      out << "            if (speed_vol > " << maxVol
-          << ") speed_vol = " << maxVol << "; end\n";
-      out << "            SOUND_SET_VOLUME(car_engine_id, speed_vol);\n";
-      out << "        end\n";
-    } else if (current->type == "logic_if") {
-      out << "        if (" << res.resolve(current->pins[1].pinId) << ")\n";
+      out << ind << " if (behavior_timer <= 0)\n";
+      out << ind << "     s_id = SOUND_LOAD(\"" << file << "\");\n";
+      out << ind << "     if (s_id > 0) SOUND_PLAY(s_id, " << loops
+          << "); end\n";
+      out << ind << "     behavior_timer = 30;\n";
+      out << ind << " end\n";
+    } else if (current->type == "action_set_animation") {
+      QString gStart = res.resolve(current->pins[2].pinId);
+      QString gEnd = res.resolve(current->pins[3].pinId);
+      QString speed = res.resolve(current->pins[4].pinId);
+      out << ind << " if (current_anim_start != " << gStart
+          << " or current_anim_end != " << gEnd << ")\n";
+      out << ind << "     current_anim_start = " << gStart
+          << "; current_anim_end = " << gEnd
+          << "; current_anim_speed = " << speed << ";\n";
+      out << ind
+          << "     anim_current_frame = current_anim_start; anim_next_frame = "
+             "current_anim_start + 1;\n";
+      out << ind
+          << "     if (anim_next_frame > current_anim_end) anim_next_frame = "
+             "current_anim_start; end\n";
+      out << ind << "     anim_interpolation = 0.0;\n";
+      out << ind << " end\n";
+    } else if (current->type == "action_npc_chase") {
+      QString targetId = res.resolve(current->pins[2].pinId);
+      QString chaseSpeed = res.resolve(current->pins[3].pinId);
+      out << ind << " s_id = " << targetId << ";\n";
+      out << ind << " if (exists(s_id))\n";
+      out << ind << "     d_dist = get_dist_3d(id, s_id);\n";
+      out << ind << "     if (d_dist > 5.0 and d_dist < 999999.0)\n";
+      out << ind << "         world_x += ( (get_val_x(s_id) - world_x) * "
+          << chaseSpeed << ") / d_dist;\n";
+      out << ind << "         world_y += ( (get_val_y(s_id) - world_y) * "
+          << chaseSpeed << ") / d_dist;\n";
+      out << ind
+          << "         world_angle = atan2(get_val_y(s_id) - world_y, "
+             "get_val_x(s_id) - world_x);\n";
+      if (entity.snapToFloor)
+        out << ind
+            << "         world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
+      out << ind << "     end\n";
+      out << ind << " end\n";
+    } else if (current->type == "action_set_path_active") {
+      out << ind << " npc_path_active = " << res.resolve(current->pins[2].pinId)
+          << ";\n";
     }
 
-    const NodePinData *outPin = nullptr;
     if (current->type == "logic_if") {
-      outPin = &current->pins[2]; // True branch
+      out << ind << " if (" << res.resolve(current->pins[3].pinId) << ")\n";
+      const NodePinData *tPin = &current->pins[1];
+      if (!tPin->linkedPinIds.isEmpty()) {
+        const NodePinData *next =
+            pinMap.value(tPin->linkedPinIds.first(), nullptr);
+        generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
+                     indent + 4, visited);
+      }
+      const NodePinData *fPin = &current->pins[2];
+      if (!fPin->linkedPinIds.isEmpty()) {
+        out << ind << " else\n";
+        const NodePinData *next =
+            pinMap.value(fPin->linkedPinIds.first(), nullptr);
+        generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
+                     indent + 4, visited);
+      }
+      out << ind << " end\n";
     } else {
-      for (const auto &pin : current->pins) {
-        if (!pin.isInput && pin.isExecution) {
-          outPin = &pin;
+      const NodePinData *outPin = nullptr;
+      for (const auto &p : current->pins) {
+        if (!p.isInput && p.isExecution) {
+          outPin = &p;
           break;
         }
       }
+      if (outPin && !outPin->linkedPinIds.isEmpty()) {
+        const NodePinData *next =
+            pinMap.value(outPin->linkedPinIds.first(), nullptr);
+        generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
+                     indent, visited);
+      }
     }
+  };
 
-    if (outPin && outPin->linkedPinId != -1) {
-      const NodePinData *nextIn = pinMap.value(outPin->linkedPinId, nullptr);
-      current = nextIn ? pinToNodeMap.value(nextIn->pinId, nullptr) : nullptr;
-    } else {
-      current = nullptr;
+  QSet<int> visited;
+  const NodeData *start = nullptr;
+  for (const auto &node : graph.nodes) {
+    if (node.type == eventType) {
+      start = &node;
+      break;
     }
   }
+  if (start)
+    generateFlow(start, 8, visited);
+
   return code;
 }

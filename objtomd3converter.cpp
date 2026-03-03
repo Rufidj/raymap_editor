@@ -17,7 +17,7 @@
 #include <QJsonValue>
 #include <QRegularExpression>
 
-ObjToMd3Converter::ObjToMd3Converter() {}
+ObjToMd3Converter::ObjToMd3Converter() : m_globalShaderName("") {}
 
 bool ObjToMd3Converter::loadMtl(const QString &filename) {
   QFile file(filename);
@@ -238,32 +238,73 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
   if (!file.open(QIODevice::ReadOnly))
     return false;
 
-  QDataStream in(&file);
-  in.setByteOrder(QDataStream::LittleEndian);
+  QByteArray allData = file.readAll();
+  file.close();
 
-  quint32 magic, version, length;
-  in >> magic >> version >> length;
+  if (allData.size() < 12)
+    return false;
+
+  const unsigned char *raw =
+      reinterpret_cast<const unsigned char *>(allData.constData());
+
+  // Header: magic (4), version (4), length (4)
+  uint32_t magic = *reinterpret_cast<const uint32_t *>(raw);
   if (magic != 0x46546C67)
     return false;
 
-  quint32 jsonChunkLen, jsonChunkType;
-  in >> jsonChunkLen >> jsonChunkType;
-  if (jsonChunkType != 0x4E4F534A)
-    return false;
-
-  QByteArray jsonData = file.read(jsonChunkLen);
+  QByteArray jsonData;
   QByteArray binData;
-  if (!file.atEnd()) {
-    quint32 binChunkLen, binChunkType;
-    in >> binChunkLen >> binChunkType;
-    if (binChunkType == 0x004E4942)
-      binData = file.read(binChunkLen);
+
+  uint32_t offset = 12;
+  while (offset + 8 <= (uint32_t)allData.size()) {
+    uint32_t chunkLen = *reinterpret_cast<const uint32_t *>(raw + offset);
+    uint32_t chunkType = *reinterpret_cast<const uint32_t *>(raw + offset + 4);
+    offset += 8;
+
+    if (offset + chunkLen > (uint32_t)allData.size())
+      break;
+
+    if (chunkType == 0x4E4F534A) { // JSON
+      jsonData = allData.mid(offset, chunkLen);
+      qDebug() << "GLB Chunk: JSON found, len =" << chunkLen;
+    } else if (chunkType == 0x004E4942) { // BIN
+      binData = allData.mid(offset, chunkLen);
+      qDebug() << "GLB Chunk: BIN found, len =" << chunkLen;
+    }
+
+    offset += chunkLen;
+    offset = (offset + 3) & ~3; // 4-byte alignment
+  }
+
+  if (jsonData.isEmpty()) {
+    qWarning() << "GLB: No JSON chunk found";
+    return false;
   }
 
   QJsonDocument doc = QJsonDocument::fromJson(jsonData);
-  if (doc.isNull())
+  if (doc.isNull()) {
+    qWarning() << "GLB: Failed to parse JSON chunk";
     return false;
+  }
   QJsonObject root = doc.object();
+
+  // SUPER DIAGNOSTIC
+  qDebug() << "--- GLB DIAGNOSTICS ---";
+  qDebug() << "File:" << filename;
+  qDebug() << "File Size on Disk:" << QFileInfo(filename).size();
+  qDebug() << "JSON Chunk Len:" << jsonData.size();
+  qDebug() << "BIN Chunk Len:" << binData.size();
+  qDebug() << "JSON Keys Found:" << root.keys();
+  if (root.contains("asset"))
+    qDebug() << "Asset Info:" << root["asset"].toObject();
+
+  // Show a bit of the JSON to see structure
+  QString jsonStr = QString::fromUtf8(jsonData);
+  qDebug() << "JSON Snippet (first 1000):" << jsonStr.left(1000);
+  if (jsonStr.contains("baseColorTexture"))
+    qDebug() << "(!) Found 'baseColorTexture' string in JSON";
+  if (jsonStr.contains(".png") || jsonStr.contains(".jpg"))
+    qDebug() << "(!) Found image extensions in JSON string";
 
   m_glbAccessors = root["accessors"].toArray();
   m_glbBufferViews = root["bufferViews"].toArray();
@@ -282,6 +323,7 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
   m_glbAnimations.clear();
   m_glbSkins.clear();
   m_animationFrames.clear();
+  m_globalShaderName = "";
 
   QJsonArray images = root["images"].toArray();
   QJsonArray textures = root["textures"].toArray();
@@ -289,9 +331,37 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
   QJsonArray meshes = root["meshes"].toArray();
   QJsonArray nodes = root["nodes"].toArray();
 
+  for (int i = 0; i < materials.size(); ++i) {
+    qDebug() << "GLB Mat" << i << ":" << materials[i].toObject();
+  }
+  for (int i = 0; i < textures.size(); ++i) {
+    qDebug() << "GLB Tex" << i << ":" << textures[i].toObject();
+  }
+
+  qDebug() << "GLB Summary: Images=" << images.size()
+           << "Tex=" << textures.size() << "Mats=" << materials.size();
+
   QVector<QImage> loadedImages;
-  for (const QJsonValue &iv : images) {
-    QJsonObject imgObj = iv.toObject();
+  if (images.isEmpty()) {
+    qDebug() << "GLB: No internal images. Searching for external fallback...";
+    QFileInfo fi(filename);
+    QString base = fi.absolutePath() + "/" + fi.baseName();
+    QStringList candidates;
+    candidates << base + ".png" << base + ".jpg" << base + ".tga";
+    for (const QString &cand : candidates) {
+      if (QFile::exists(cand)) {
+        QImage extImg;
+        if (extImg.load(cand)) {
+          qDebug() << "GLB: External fallback texture found:" << cand;
+          loadedImages.append(extImg);
+          break;
+        }
+      }
+    }
+  }
+
+  for (int i = 0; i < images.size(); ++i) {
+    QJsonObject imgObj = images[i].toObject();
     QImage img;
     if (imgObj.contains("bufferView")) {
       int bvIdx = imgObj["bufferView"].toInt(-1);
@@ -299,8 +369,17 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
         QJsonObject bv = m_glbBufferViews[bvIdx].toObject();
         int bvOffset = bv["byteOffset"].toInt(0);
         int bvLen = bv["byteLength"].toInt();
-        img.loadFromData(binData.mid(bvOffset, bvLen));
+        if (bvOffset + bvLen <= binData.size()) {
+          img.loadFromData(binData.mid(bvOffset, bvLen));
+        } else {
+          qWarning() << "GLB: Image" << i << "bufferView out of bounds";
+        }
       }
+    }
+    if (img.isNull()) {
+      qWarning() << "GLB: Failed to load image" << i;
+    } else {
+      qDebug() << "GLB: Loaded image" << i << img.size();
     }
     loadedImages.append(img);
   }
@@ -317,8 +396,9 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
       QJsonObject pbr = mat["pbrMetallicRoughness"].toObject();
       if (pbr.contains("baseColorFactor")) {
         QJsonArray f = pbr["baseColorFactor"].toArray();
-        color = QColor(f[0].toDouble() * 255, f[1].toDouble() * 255,
-                       f[2].toDouble() * 255);
+        color = QColor(qBound(0, (int)(f[0].toDouble() * 255), 255),
+                       qBound(0, (int)(f[1].toDouble() * 255), 255),
+                       qBound(0, (int)(f[2].toDouble() * 255), 255));
       }
       if (pbr.contains("baseColorTexture")) {
         int tIdx = pbr["baseColorTexture"].toObject()["index"].toInt(-1);
@@ -331,6 +411,16 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
           }
         }
       }
+    }
+
+    // FALLBACK: If no texture was found via PBR but we have a fallback image
+    // loaded
+    if (!m.hasTexture && !loadedImages.isEmpty()) {
+      qDebug() << "GLB: Assigning fallback external texture to material:"
+               << name;
+      m.textureImage = loadedImages[0];
+      m.hasTexture = true;
+      m.glbImageIdx = 0;
     }
     m.name = name;
     m.color = color;
@@ -448,19 +538,23 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
 
   for (int nIdx = 0; nIdx < m_glbNodes.size(); ++nIdx) {
     const auto &node = m_glbNodes[nIdx];
-    if (node.mesh == -1)
+    if (node.mesh == -1 || node.mesh >= meshes.size())
       continue;
+
     QJsonObject meshObj = meshes[node.mesh].toObject();
     QJsonArray primitives = meshObj["primitives"].toArray();
+
     for (const QJsonValue &pv : primitives) {
       QJsonObject prim = pv.toObject();
       QJsonObject attrs = prim["attributes"].toObject();
-      int posIdx = attrs["POSITION"].toInt(-1),
-          uvIdx = attrs["TEXCOORD_0"].toInt(-1);
-      int jointIdx = attrs["JOINTS_0"].toInt(-1),
-          weightIdx = attrs["WEIGHTS_0"].toInt(-1);
-      int indicesIdx = prim["indices"].toInt(-1),
-          matIdx = prim["material"].toInt(-1);
+
+      int posIdx = attrs["POSITION"].toInt(-1);
+      int uvIdx = attrs["TEXCOORD_0"].toInt(-1);
+      int jointIdx = attrs["JOINTS_0"].toInt(-1);
+      int weightIdx = attrs["WEIGHTS_0"].toInt(-1);
+      int indicesIdx = prim["indices"].toInt(-1);
+      int matIdx = prim["material"].toInt(-1);
+
       if (posIdx == -1)
         continue;
 
@@ -472,20 +566,37 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
       if (vStride == 0)
         vStride = 12;
 
-      int uvCount, uvCompType, uvStride;
+      int uvCount = 0, uvCompType = 0, uvStride = 0;
       const char *uvRaw =
           (uvIdx >= 0) ? getAccessorData(uvIdx, uvCount, uvCompType, uvStride)
                        : nullptr;
       if (uvRaw && uvStride == 0)
         uvStride = (uvCompType == 5126 ? 8 : (uvCompType == 5123 ? 4 : 2));
 
+      int jointsCount = 0, jointsCompType = 0, jointsStride = 0;
+      const char *jointsRaw =
+          (jointIdx >= 0) ? getAccessorData(jointIdx, jointsCount,
+                                            jointsCompType, jointsStride)
+                          : nullptr;
+      if (jointsRaw && jointsStride == 0)
+        jointsStride = (jointsCompType == 5123 ? 8 : 4);
+
+      int weightsCount = 0, weightsCompType = 0, weightsStride = 0;
+      const char *weightsRaw =
+          (weightIdx >= 0) ? getAccessorData(weightIdx, weightsCount,
+                                             weightsCompType, weightsStride)
+                           : nullptr;
+      if (weightsRaw && weightsStride == 0)
+        weightsStride = 16;
+
       int baseVertexIndex = m_finalVertices.size();
-      for (int i = 0; i < vCount; i++) {
+      for (int i = 0; i < vCount; ++i) {
         const float *vPtr =
             reinterpret_cast<const float *>(vDataRaw + i * vStride);
         m_finalVertices.append(QVector3D(vPtr[0], vPtr[1], vPtr[2]));
+
+        float u = 0.5f, v = 0.5f;
         if (uvRaw && i < uvCount) {
-          float u = 0, v = 0;
           const char *uvPtr = uvRaw + i * uvStride;
           if (uvCompType == 5126) {
             u = reinterpret_cast<const float *>(uvPtr)[0];
@@ -494,37 +605,27 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
             u = reinterpret_cast<const quint16 *>(uvPtr)[0] / 65535.f;
             v = reinterpret_cast<const quint16 *>(uvPtr)[1] / 65535.f;
           }
-          m_finalTexCoords.append(QVector2D(u, v));
-        } else
-          m_finalTexCoords.append(QVector2D(0.5f, 0.5f));
+          v = 1.0f - v; // Flip V for MD3
+        }
+        m_finalTexCoords.append(QVector2D(u, v));
 
         SkinData sd;
         sd.parentNodeIdx = nIdx;
-        if (jointIdx >= 0 && weightIdx >= 0) {
-          int jCount, jCompType, jStride;
-          const char *jData =
-              getAccessorData(jointIdx, jCount, jCompType, jStride);
-          if (jData) {
-            if (jStride == 0)
-              jStride = (jCompType == 5123 ? 8 : 4);
-            const char *jPtr = jData + i * jStride;
-            for (int j = 0; j < 4; ++j)
-              sd.joints[j] =
-                  (jCompType == 5123
-                       ? (int)reinterpret_cast<const quint16 *>(jPtr)[j]
-                       : (int)reinterpret_cast<const quint8 *>(jPtr)[j]);
+        if (jointsRaw && weightsRaw && i < jointsCount && i < weightsCount) {
+          const char *jPtr = jointsRaw + i * jointsStride;
+          if (jointsCompType == 5123) {
+            const quint16 *p = reinterpret_cast<const quint16 *>(jPtr);
+            for (int k = 0; k < 4; ++k)
+              sd.joints[k] = p[k];
+          } else {
+            const quint8 *p = reinterpret_cast<const quint8 *>(jPtr);
+            for (int k = 0; k < 4; ++k)
+              sd.joints[k] = p[k];
           }
-          int wCount, wCompType, wStride;
-          const char *wData =
-              getAccessorData(weightIdx, wCount, wCompType, wStride);
-          if (wData) {
-            if (wStride == 0)
-              wStride = 16;
-            const float *wPtr =
-                reinterpret_cast<const float *>(wData + i * wStride);
-            for (int j = 0; j < 4; ++j)
-              sd.weights[j] = wPtr[j];
-          }
+          const float *wPtr =
+              reinterpret_cast<const float *>(weightsRaw + i * weightsStride);
+          for (int k = 0; k < 4; ++k)
+            sd.weights[k] = wPtr[k];
         }
         m_vertexSkins.append(sd);
       }
@@ -691,15 +792,16 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale,
 
     ObjMaterial &mat = m_materials[matName];
 
+    int numShaders = 1;
     out << (int)0;                  // Flags
     out << (int)frameCount;         // Frames
-    out << (int)0;                  // Shaders
+    out << (int)numShaders;         // 1 Shader per surface
     out << (int)sortedVerts.size(); // Num verts
     out << (int)tris.size();        // Num triangles
 
     int ofs_s_tris = 108;
     int ofs_s_shaders = ofs_s_tris + tris.size() * 12;
-    int ofs_s_st = ofs_s_shaders;
+    int ofs_s_st = ofs_s_shaders + numShaders * 68; // 64 (name) + 4 (index)
     int ofs_s_verts = ofs_s_st + sortedVerts.size() * 8;
     int ofs_s_end = ofs_s_verts + sortedVerts.size() * 8 * frameCount;
 
@@ -707,30 +809,35 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale,
 
     // Triangles
     for (const auto &t : tris) {
-      out << globalToLocal[t.indices[0]] << globalToLocal[t.indices[1]]
-          << globalToLocal[t.indices[2]];
+      out << globalToLocal[t.indices[0]] << globalToLocal[t.indices[2]]
+          << globalToLocal[t.indices[1]];
     }
+
+    // Shaders
+    char shaderNameBuf[64] = {0};
+    QString shaderPath = m_globalShaderName;
+    if (shaderPath.isEmpty()) {
+      shaderPath = matName + ".png";
+    }
+    QByteArray shaderNameUtf8 = QFileInfo(shaderPath).fileName().toLatin1();
+    shaderNameUtf8.truncate(63);
+    strcpy(shaderNameBuf, shaderNameUtf8.constData());
+    out.writeRawData(shaderNameBuf, 64);
+    out << (int)0; // Shader index
 
     // UVs
     for (int gIdx : sortedVerts) {
       QVector2D uv = m_finalTexCoords[gIdx];
-
-      // Apply material-specific UV transform (for atlas)
-      uv.setX(uv.x() - floor(uv.x())); // Handle tiling
-      uv.setY(uv.y() - floor(uv.y()));
-
+      // Use raw UVs. The engine's rasterizer already handles wrapping.
       float newU = mat.uvOffset.x() + uv.x() * mat.uvScale.x();
       float newV = mat.uvOffset.y() + uv.y() * mat.uvScale.y();
-
-      out << newU << newV; // V=0 is TOP for libmod_ray
+      out << newU << newV;
     }
 
     // Vertices (multiple frames)
     for (int f = 0; f < frameCount; ++f) {
       for (int gIdx : sortedVerts) {
         QVector3D v = allFrames[f][gIdx];
-        // Bake the user-provided scale back into the mesh
-        // MD3 coordinates are int16 scaled by 1/64.0f by the engine
         out << (short)qBound(-32768, (int)(v.x() * scale * 64.0f), 32767);
         out << (short)qBound(-32768, (int)(v.y() * scale * 64.0f), 32767);
         out << (short)qBound(-32768, (int)(v.z() * scale * 64.0f), 32767);
@@ -739,16 +846,17 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale,
     }
 
     // Update Surface Offsets
-    qint64 currentPos = file.pos();
+    qint64 surfEnd = file.pos();
     file.seek(surfStart + 104);
-    out << (int)(currentPos - surfStart); // offsetEnd
-    file.seek(currentPos);
+    out << (int)(surfEnd - surfStart); // offsetEnd
+    file.seek(surfEnd);
   }
 
-  // Final EOF
+  // Final EOF offset in header
   ofs_eof = file.pos();
   file.seek(104);
   out << ofs_eof;
+  file.seek(ofs_eof);
 
   // Generate model animation config if we have animations from GLB
   if (!m_glbAnimations.isEmpty()) {
@@ -766,8 +874,8 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale,
         stream << QString("%1\t%2\t%3\t%4\t// %5\n")
                       .arg(anim.startFrame)
                       .arg(length)
-                      .arg(length) // looping frames (default to all)
-                      .arg(24)     // fps (default)
+                      .arg(length)
+                      .arg(24)
                       .arg(anim.name.isEmpty() ? "anim" : anim.name);
       }
       cfgFile.close();
@@ -904,7 +1012,11 @@ bool ObjToMd3Converter::generateTextureAtlas(const QString &outputPath,
   }
 
   qDebug() << "Atlas baking complete, saving to:" << outputPath;
-  return image.save(outputPath);
+  if (image.save(outputPath)) {
+    m_globalShaderName = outputPath;
+    return true;
+  }
+  return false;
 }
 
 QString ObjToMd3Converter::debugInfo() const {
@@ -971,6 +1083,9 @@ void ObjToMd3Converter::decimate(int targetTriangles) {
 }
 
 bool ObjToMd3Converter::mergeTextures(const QString &atlasPath, int atlasSize) {
+  if (m_faceMaterialIndices.isEmpty())
+    return false;
+
   QSet<int> usedMatSet;
   for (int idx : m_faceMaterialIndices)
     usedMatSet.insert(idx);
@@ -978,8 +1093,27 @@ bool ObjToMd3Converter::mergeTextures(const QString &atlasPath, int atlasSize) {
   QVector<int> activeMats = usedMatSet.values().toVector();
   std::sort(activeMats.begin(), activeMats.end()); // Predictable grid
 
-  if (activeMats.size() <= 1)
+  if (activeMats.size() == 0)
     return false;
+
+  if (activeMats.size() == 1) {
+    qDebug() << "GLB: Single material detected, ensuring 1:1 texture mapping.";
+    ObjMaterial &mat = m_materials[m_materialNames[activeMats[0]]];
+    if (mat.hasTexture && !mat.textureImage.isNull()) {
+      mat.textureImage
+          .scaled(atlasSize, atlasSize, Qt::IgnoreAspectRatio,
+                  Qt::SmoothTransformation)
+          .save(atlasPath);
+    } else {
+      QImage fallback(atlasSize, atlasSize, QImage::Format_ARGB32);
+      fallback.fill(mat.color);
+      fallback.save(atlasPath);
+    }
+    mat.uvScale = QVector2D(1.0f, 1.0f);
+    mat.uvOffset = QVector2D(0.0f, 0.0f);
+    m_globalShaderName = atlasPath;
+    return true;
+  }
 
   int numMats = activeMats.size();
   int cols = qCeil(qSqrt(numMats));
@@ -1026,7 +1160,9 @@ bool ObjToMd3Converter::mergeTextures(const QString &atlasPath, int atlasSize) {
   }
 
   atlas.save(atlasPath);
-  qDebug() << "Atlas saved and material UV transforms updated.";
+  m_globalShaderName = atlasPath;
+  qDebug() << "Atlas saved and material UV transforms updated. Shader:"
+           << m_globalShaderName;
 
   // Remap Vertices
   QVector<QVector2D> newUVs = m_finalTexCoords;
@@ -1079,6 +1215,7 @@ bool ObjToMd3Converter::mergeTextures(const QString &atlasPath, int atlasSize) {
     if (!unifiedTex.isNull()) {
       painter.drawImage(atlas.rect(), unifiedTex.scaled(atlasSize, atlasSize));
       atlas.save(atlasPath);
+      m_globalShaderName = atlasPath;
     }
 
     // Reset transforms to 1:1 since it's a unified texture
@@ -1088,11 +1225,14 @@ bool ObjToMd3Converter::mergeTextures(const QString &atlasPath, int atlasSize) {
       m.uvOffset = QVector2D(0.0f, 0.0f);
     }
 
+    m_globalShaderName = atlasPath;
     return true;
   }
 
   atlas.save(atlasPath);
-  qDebug() << "Atlas saved and material UV transforms updated.";
+  m_globalShaderName = atlasPath;
+  qDebug() << "Atlas saved and material UV transforms updated. Shader:"
+           << m_globalShaderName;
   return true;
 }
 

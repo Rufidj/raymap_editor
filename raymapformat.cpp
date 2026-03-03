@@ -547,6 +547,25 @@ bool RayMapFormat::loadMap(
 
       mapData.entities.append(entity);
     }
+
+    // --- FIX: Filter out redundant spawn flags that are actually entities ---
+    // The RAYMAP format saves both 'real' spawn flags and entities in the
+    // spawn_flags section for engine compatibility. When loading back into
+    // the editor, we must remove the duplicates from the spawnFlags vector
+    // so they are only managed via the entities vector.
+    for (int i = mapData.spawnFlags.size() - 1; i >= 0; --i) {
+      int flagId = mapData.spawnFlags[i].flagId;
+      bool isEntity = false;
+      for (const EntityInstance &ent : mapData.entities) {
+        if (ent.spawn_id == flagId) {
+          isEntity = true;
+          break;
+        }
+      }
+      if (isEntity) {
+        mapData.spawnFlags.removeAt(i);
+      }
+    }
   }
 
   // ===== NPC PATHS (v13) =====

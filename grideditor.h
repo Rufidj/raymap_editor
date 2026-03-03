@@ -127,6 +127,7 @@ private:
   // Multi-selection state
   QList<int> m_multiSelectedSectors;
   QList<int> m_multiSelectedEntities;
+  QList<int> m_multiSelectedSpawnFlags;
   QList<int> m_multiSelectedLights;
   bool m_isSelecting;
   QPointF m_selectionStart;
@@ -137,6 +138,7 @@ private:
   QPointF m_multiMoveStartPos;
   QMap<int, QVector<QPointF>> m_initialMultiSelectedSectorVertices;
   QMap<int, QPointF> m_initialMultiSelectedEntityPositions;
+  QMap<int, QPointF> m_initialMultiSelectedSpawnFlagPositions;
   QMap<int, QPointF> m_initialMultiSelectedLightPositions;
 
   // Copy/Paste buffer

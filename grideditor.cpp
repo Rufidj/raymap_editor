@@ -666,8 +666,17 @@ void GridEditor::drawSpawnFlags(QPainter &painter) {
   painter.setBrush(QBrush(QColor(255, 0, 255)));
   painter.setPen(QPen(QColor(255, 128, 255), 2));
 
-  for (const SpawnFlag &flag : m_mapData->spawnFlags) {
+  for (int i = 0; i < m_mapData->spawnFlags.size(); ++i) {
+    const SpawnFlag &flag = m_mapData->spawnFlags[i];
     QPoint pos = worldToScreen(QPointF(flag.x, flag.y));
+
+    // Highlight selected
+    if (m_multiSelectedSpawnFlags.contains(i)) {
+      painter.setPen(QPen(Qt::yellow, 3));
+    } else {
+      painter.setPen(QPen(QColor(255, 128, 255), 2));
+    }
+
     painter.drawRect(pos.x() - 5, pos.y() - 5, 10, 10);
     painter.drawText(pos + QPoint(8, 0), QString::number(flag.flagId));
   }
@@ -1008,6 +1017,13 @@ void GridEditor::mousePressEvent(QMouseEvent *event) {
             clickedOnSelected = true;
         }
 
+        // Check spawn flags
+        if (!clickedOnSelected) {
+          int sfIdx = findSpawnFlagAt(worldPos, 20.0f);
+          if (sfIdx >= 0 && m_multiSelectedSpawnFlags.contains(sfIdx))
+            clickedOnSelected = true;
+        }
+
         // Check sectors
         if (!clickedOnSelected && m_mapData) {
           for (int idx : m_multiSelectedSectors) {
@@ -1046,6 +1062,11 @@ void GridEditor::mousePressEvent(QMouseEvent *event) {
             m_initialMultiSelectedLightPositions[idx] =
                 QPointF(m_mapData->lights[idx].x, m_mapData->lights[idx].y);
         }
+        for (int idx : m_multiSelectedSpawnFlags) {
+          if (idx >= 0 && idx < m_mapData->spawnFlags.size())
+            m_initialMultiSelectedSpawnFlagPositions[idx] = QPointF(
+                m_mapData->spawnFlags[idx].x, m_mapData->spawnFlags[idx].y);
+        }
         setCursor(Qt::SizeAllCursor);
       } else {
         m_isSelecting = true;
@@ -1053,6 +1074,7 @@ void GridEditor::mousePressEvent(QMouseEvent *event) {
         m_selectionRect = QRectF(worldPos, QSizeF(0, 0));
         m_multiSelectedSectors.clear();
         m_multiSelectedEntities.clear();
+        m_multiSelectedSpawnFlags.clear();
         m_multiSelectedLights.clear();
         update();
       }
@@ -1318,13 +1340,13 @@ void GridEditor::mouseMoveEvent(QMouseEvent *event) {
       }
     }
 
-    // Move lights
-    for (int idx : m_multiSelectedLights) {
-      if (m_initialMultiSelectedLightPositions.contains(idx)) {
-        Light &l = m_mapData->lights[idx];
-        QPointF initial = m_initialMultiSelectedLightPositions[idx];
-        l.x = initial.x() + offset.x();
-        l.y = initial.y() + offset.y();
+    // Move spawn flags
+    for (int idx : m_multiSelectedSpawnFlags) {
+      if (m_initialMultiSelectedSpawnFlagPositions.contains(idx)) {
+        SpawnFlag &sf = m_mapData->spawnFlags[idx];
+        QPointF initial = m_initialMultiSelectedSpawnFlagPositions[idx];
+        sf.x = initial.x() + offset.x();
+        sf.y = initial.y() + offset.y();
       }
     }
 
@@ -1362,6 +1384,7 @@ void GridEditor::mouseReleaseEvent(QMouseEvent *event) {
       m_isMovingMultiSelection = false;
       m_initialMultiSelectedSectorVertices.clear();
       m_initialMultiSelectedEntityPositions.clear();
+      m_initialMultiSelectedSpawnFlagPositions.clear();
       m_initialMultiSelectedLightPositions.clear();
       setCursor(Qt::ArrowCursor);
 
@@ -1379,6 +1402,7 @@ void GridEditor::mouseReleaseEvent(QMouseEvent *event) {
       // Finalize selection
       m_multiSelectedSectors.clear();
       m_multiSelectedEntities.clear();
+      m_multiSelectedSpawnFlags.clear();
       m_multiSelectedLights.clear();
 
       if (m_mapData) {
@@ -1400,6 +1424,14 @@ void GridEditor::mouseReleaseEvent(QMouseEvent *event) {
           const EntityInstance &e = m_mapData->entities[i];
           if (m_selectionRect.contains(QPointF(e.x, e.y))) {
             m_multiSelectedEntities.append(i);
+          }
+        }
+
+        // Find spawn flags in rect
+        for (int i = 0; i < m_mapData->spawnFlags.size(); ++i) {
+          const SpawnFlag &f = m_mapData->spawnFlags[i];
+          if (m_selectionRect.contains(QPointF(f.x, f.y))) {
+            m_multiSelectedSpawnFlags.append(i);
           }
         }
 
@@ -1459,9 +1491,9 @@ void GridEditor::contextMenuEvent(QContextMenuEvent *event) {
   QPointF worldPos = screenToWorld(event->pos());
   m_lastCursorPos = worldPos; // Store for pasteSelection()
 
-  bool hasSelection = !m_multiSelectedSectors.isEmpty() ||
-                      !m_multiSelectedEntities.isEmpty() ||
-                      !m_multiSelectedLights.isEmpty();
+  bool hasSelection =
+      !m_multiSelectedSectors.isEmpty() || !m_multiSelectedEntities.isEmpty() ||
+      !m_multiSelectedSpawnFlags.isEmpty() || !m_multiSelectedLights.isEmpty();
   bool hasBuffer = !m_copyBufferSectors.isEmpty() ||
                    !m_copyBufferEntities.isEmpty() ||
                    !m_copyBufferLights.isEmpty();
@@ -1489,8 +1521,7 @@ void GridEditor::contextMenuEvent(QContextMenuEvent *event) {
   }
 
   // Check for entity first (highest priority)
-  int entityIdx =
-      findEntityAt(worldPos, 50.0f); // Increased tolerance even more
+  int entityIdx = findEntityAt(worldPos, 20.0f);
   qDebug() << "Context menu at" << worldPos << "Entity Index:" << entityIdx;
   if (entityIdx >= 0 && m_mapData) {
     const EntityInstance &ent = m_mapData->entities[entityIdx];
@@ -1776,30 +1807,25 @@ void GridEditor::dropEvent(QDropEvent *event) {
     QFileInfo info(filePath);
     QString ext = info.suffix().toLower();
 
-    if (ext == "md3") {
+    if (ext == "md3" || ext == "glb" || ext == "gltf") {
       // Calculate drop position in world coordinates
       QPointF dropPos = screenToWorld(event->pos());
 
       // Create Entity Instance
       EntityInstance entity;
       entity.assetPath = filePath;
-      entity.type = "model";
+      entity.type = (ext == "md3") ? "model" : "gltf";
 
-      // Generate process name from filename (e.g., "caja.md3" -> "caja")
-      QString baseName =
-          info.completeBaseName(); // Gets filename without extension
+      // Generate process name from filename
+      QString baseName = info.completeBaseName();
       entity.processName = baseName;
 
       entity.x = dropPos.x();
       entity.y = dropPos.y();
       entity.z = 0.0f;
-      entity.spawn_id =
-          m_mapData->getNextSpawnEntityId(); // Unified ID generation
+      entity.spawn_id = m_mapData->getNextSpawnEntityId();
 
       m_mapData->entities.append(entity);
-
-      // QMessageBox removed as per user request
-
       update();
       event->acceptProposedAction();
     } else if (ext == "campath") {
@@ -2014,6 +2040,16 @@ void GridEditor::deleteSelection() {
   }
   m_multiSelectedEntities.clear();
   m_selectedEntity = -1;
+
+  // Spawn Flags (Directly selected ones)
+  std::sort(m_multiSelectedSpawnFlags.begin(), m_multiSelectedSpawnFlags.end(),
+            std::greater<int>());
+  for (int idx : m_multiSelectedSpawnFlags) {
+    if (idx >= 0 && idx < m_mapData->spawnFlags.size()) {
+      m_mapData->spawnFlags.removeAt(idx);
+    }
+  }
+  m_multiSelectedSpawnFlags.clear();
 
   // Sectors
   std::sort(m_multiSelectedSectors.begin(), m_multiSelectedSectors.end(),

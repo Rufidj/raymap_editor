@@ -49,6 +49,9 @@ public:
   bool generateTextureAtlas(const QString &outputPath, int size = 512);
   QString debugInfo() const;
 
+  void setGlobalShaderName(const QString &name) { m_globalShaderName = name; }
+  QString globalShaderName() const { return m_globalShaderName; }
+
   // Processing
   void decimate(int targetTriangles);
   bool mergeTextures(const QString &atlasPath, int atlasSize = 2048);
@@ -74,33 +77,6 @@ public:
   }
   const QVector<QString> &materialNames() const { return m_materialNames; }
   const QMap<QString, ObjMaterial> &materials() const { return m_materials; }
-
-  // Python Integration (Deprecated)
-  static bool convertViaPython(const QString &input, const QString &output,
-                               double scale, QString &outputLog);
-
-private:
-  struct VertexData {
-    QVector3D position;
-    QVector2D texCoord;
-    int originalIndex;
-    // Key for map: position indices + uv indices
-  };
-
-  QVector<QVector3D> m_rawVertices;
-  QVector<QVector2D> m_rawTexCoords;
-  QVector<QVector3D> m_finalVertices;
-  QVector<QVector2D> m_finalTexCoords;
-  QVector<Md3Triangle> m_triangles;
-  QVector<int> m_faceMaterialIndices;
-
-  QMap<QString, ObjMaterial> m_materials;
-  QVector<QString>
-      m_materialNames; // Indexed list matching m_faceMaterialIndices
-  QString m_baseTexturePath;
-
-  // Animation Data
-  QVector<QVector<QVector3D>> m_animationFrames;
 
   struct GlbNode {
     QString name;
@@ -139,11 +115,37 @@ private:
     int skeletonRoot = -1;
   };
 
+  const QVector<GlbAnimation> &glbAnimations() const { return m_glbAnimations; }
+
+  // Python Integration (Deprecated)
+  static bool convertViaPython(const QString &input, const QString &output,
+                               double scale, QString &outputLog);
+
+private:
+  struct VertexData {
+    QVector3D position;
+    QVector2D texCoord;
+    int originalIndex;
+  };
+
+  QVector<QVector3D> m_rawVertices;
+  QVector<QVector2D> m_rawTexCoords;
+  QVector<QVector3D> m_finalVertices;
+  QVector<QVector2D> m_finalTexCoords;
+  QVector<Md3Triangle> m_triangles;
+  QVector<int> m_faceMaterialIndices;
+
+  QMap<QString, ObjMaterial> m_materials;
+  QVector<QString> m_materialNames;
+  QString m_baseTexturePath;
+  QString m_globalShaderName;
+
+  QVector<QVector<QVector3D>> m_animationFrames;
+
   QVector<GlbNode> m_glbNodes;
   QVector<GlbAnimation> m_glbAnimations;
   QVector<GlbSkin> m_glbSkins;
 
-  // Vertex skinning data
   struct SkinData {
     int joints[4] = {0, 0, 0, 0};
     float weights[4] = {0, 0, 0, 0};
@@ -162,14 +164,12 @@ private:
   void updateNodeTransforms(QVector<GlbNode> &nodes, int nodeIdx,
                             const QMatrix4x4 &parentTransform);
 
-  // Helper to unify vertices
   void processFaceVertex(int vIdx, int vtIdx, int vnIdx, int matIdx,
                          QMap<QString, int> &vertexMap,
                          QVector<QVector3D> &tempVerts,
                          QVector<QVector2D> &tempUVs);
 
 public:
-  // Progress callback: (percentage 0-100, status text)
   std::function<void(int, QString)> onProgress;
   void setProgress(int p, const QString &s) {
     if (onProgress)

@@ -254,6 +254,15 @@ QString ProcessGenerator::generateAllProcessesCode(
     }
   }
 
+  // Global player position for NPC AI (avoids buggy inter-process _id.x access)
+  out << "// Global player position (shared with NPCs for reliable distance "
+         "calculation)\n";
+  out << "global\n";
+  out << "  double g_player_x;\n";
+  out << "  double g_player_y;\n";
+  out << "  double g_player_z;\n";
+  out << "end\n\n";
+
   // Generate one process per entity INSTANCE (not per unique name)
   // Each instance gets a unique name: processName_spawnId
   QSet<QString> generatedNames;
@@ -812,6 +821,9 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
           out << "        world_x = RAY_GET_SPRITE_X(sprite_id); world_y = "
                  "RAY_GET_SPRITE_Y(sprite_id); world_z = "
                  "RAY_GET_SPRITE_Z(sprite_id);\n";
+          // Broadcast player position to global vars for NPC AI
+          out << "        g_player_x = world_x; g_player_y = world_y; "
+                 "g_player_z = world_z;\n";
         } else {
           // Manual Tank-Drive Move (Coordinate-based)
           out << "        if (key(_w) || key(_up))\n";
@@ -938,9 +950,33 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "        if (behavior_timer > 0) behavior_timer = behavior_timer - "
            "1; end\n";
 
+    // Pre-compute distance to player using global vars (reliable)
+    if (!entity.isPlayer && !updateCode.isEmpty()) {
+      out << "        // Distance to player (global position - avoids "
+             "inter-process bug)\n";
+      out << "        dx = world_x - g_player_x;\n";
+      out << "        dy = world_y - g_player_y;\n";
+      out << "        d_dist = sqrt(dx*dx + dy*dy);\n";
+    }
+
     if (!updateCode.isEmpty()) {
       out << "        // Behavior Update (Each Frame)\n";
       out << "        " << updateCode.replace("\n", "\n        ") << "\n";
+    }
+
+    // Auto return to patrol when player is far away
+    if (!entity.isPlayer && entity.npcPathId >= 0 && !updateCode.isEmpty()) {
+      out << "        // Auto-disengage: return to patrol if player is far\n";
+      out << "        if (npc_path_active == 0 && d_dist > 2000)\n";
+      out << "            npc_path_active = 1;\n";
+      out << "        end\n";
+      out << "        // Restore walk animation when patrolling\n";
+      out << "        if (npc_path_active == 1 && current_anim_start != 0)\n";
+      out << "            current_anim_start = 0; current_anim_end = 14; "
+             "current_anim_speed = 10;\n";
+      out << "            anim_current_frame = 0; anim_next_frame = 1;\n";
+      out << "            anim_interpolation = 0.0;\n";
+      out << "        end\n";
     }
 
     if (entity.type == "model" || entity.type == "gltf") {
@@ -1112,13 +1148,13 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   out << "function float get_val_z(int _id) begin if (exists(_id)) return "
          "_id.z; end return 0.0; end\n\n";
 
-  out << "// Safe 3D Distance calculation\n";
+  out << "// Safe 3D Distance calculation (returns distance in editor units)\n";
   out << "function float get_dist_3d(int id1, int id2)\n";
   out << "begin\n";
   out << "    if (not exists(id1) or not exists(id2)) return 999999.0; end\n";
   out << "    return sqrt(pow(get_val_x(id1)-get_val_x(id2),2) + "
          "pow(get_val_y(id1)-get_val_y(id2),2) + "
-         "pow((get_val_z(id1)-get_val_z(id2))/16.0,2));\n";
+         "pow((get_val_z(id1)-get_val_z(id2))/16.0,2)) / 100.0;\n";
   out << "end\n\n";
 
   // Helper function to follow a path - ALWAYS present to avoid undefined
@@ -1273,6 +1309,17 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
               QString target = (srcNode->type == "math_dist")
                                    ? resolve(srcNode->pins[1].pinId)
                                    : "TYPE_PLAYER";
+
+              bool isPlayer = (target == "TYPE_PLAYER" ||
+                               (!playerProcessName.isEmpty() &&
+                                target.contains(playerProcessName)));
+
+              if (isPlayer) {
+                // Use pre-computed d_dist scaled for editor units
+                // (divide by 4 so user values like 60/500 map to real 240/2000)
+                return "(d_dist / 4.0)";
+              }
+
               if (target == "TYPE_PLAYER" && !playerProcessName.isEmpty())
                 target = "get_id(type " + playerProcessName + ")";
               return QString("get_dist_3d(id, %1)").arg(target);
@@ -1354,6 +1401,11 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       QString gStart = res.resolve(current->pins[2].pinId);
       QString gEnd = res.resolve(current->pins[3].pinId);
       QString speed = res.resolve(current->pins[4].pinId);
+      // Stop path and face player during animation (e.g. attack)
+      out << ind << " npc_path_active = 0;\n";
+      out << ind
+          << " world_angle = atan2(g_player_y - world_y, "
+             "g_player_x - world_x) / 57295.78;\n";
       out << ind << " if (current_anim_start != " << gStart
           << " or current_anim_end != " << gEnd << ")\n";
       out << ind << "     current_anim_start = " << gStart
@@ -1368,23 +1420,28 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       out << ind << "     anim_interpolation = 0.0;\n";
       out << ind << " end\n";
     } else if (current->type == "action_npc_chase") {
-      QString targetId = res.resolve(current->pins[2].pinId);
       QString chaseSpeed = res.resolve(current->pins[3].pinId);
-      out << ind << " s_id = " << targetId << ";\n";
-      out << ind << " if (exists(s_id))\n";
-      out << ind << "     d_dist = get_dist_3d(id, s_id);\n";
-      out << ind << "     if (d_dist > 5.0 and d_dist < 999999.0)\n";
-      out << ind << "         world_x += ( (get_val_x(s_id) - world_x) * "
-          << chaseSpeed << ") / d_dist;\n";
-      out << ind << "         world_y += ( (get_val_y(s_id) - world_y) * "
-          << chaseSpeed << ") / d_dist;\n";
+      out << ind << " // Chase: use global player position\n";
+      out << ind << " npc_path_active = 0;\n";
+      out << ind << " if (d_dist > 5.0)\n";
       out << ind
-          << "         world_angle = atan2(get_val_y(s_id) - world_y, "
-             "get_val_x(s_id) - world_x);\n";
+          << "     world_angle = atan2(g_player_y - world_y, "
+             "g_player_x - world_x) / 57295.78;\n";
+      out << ind << "     world_x += ((g_player_x - world_x) / d_dist) * "
+          << chaseSpeed << " * 3;\n";
+      out << ind << "     world_y += ((g_player_y - world_y) / d_dist) * "
+          << chaseSpeed << " * 3;\n";
       if (entity.snapToFloor)
         out << ind
-            << "         world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
-      out << ind << "     end\n";
+            << "     world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
+      out << ind << " end\n";
+      // Set walk animation during chase
+      out << ind << " if (current_anim_start != 0)\n";
+      out << ind
+          << "     current_anim_start = 0; current_anim_end = 14; "
+             "current_anim_speed = 10;\n";
+      out << ind << "     anim_current_frame = 0; anim_next_frame = 1;\n";
+      out << ind << "     anim_interpolation = 0.0;\n";
       out << ind << " end\n";
     } else if (current->type == "action_set_path_active") {
       out << ind << " npc_path_active = " << res.resolve(current->pins[2].pinId)

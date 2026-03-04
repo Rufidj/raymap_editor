@@ -584,20 +584,18 @@ QByteArray FontEditorDialog::createFntData() {
           }
           writeLE16(pixelDataBlob, color565);
         } else if (currentBpp == 32) {
-          // RGBA (Little Endian -> A B G R ?)
-          // Standard RGBA or ARGB?
-          // Bennu usually uses RGBA8888 or ARGB8888 depending on platform.
-          // Assuming RGBA (R low, A high).
-
-          uint8_t R = qRed(p);
-          uint8_t G = qGreen(p);
-          uint8_t B = qBlue(p);
-          uint8_t A = qAlpha(p);
-
-          pixelDataBlob.append((char)R);
-          pixelDataBlob.append((char)G);
-          pixelDataBlob.append((char)B);
-          pixelDataBlob.append((char)A);
+          // BennuGD reads uint32 LE with masks: R=0x00FF0000, G=0x0000FF00,
+          // B=0x000000FF, A=0xFF000000.
+          // A uint32 0xAARRGGBB in little-endian memory is stored as bytes:
+          // byte0=BB, byte1=GG, byte2=RR, byte3=AA
+          int R = qRed(p);
+          int G = qGreen(p);
+          int B = qBlue(p);
+          int A = alpha;                 // already extracted above as qAlpha(p)
+          pixelDataBlob.append((char)B); // byte 0 -> mask 0x000000FF
+          pixelDataBlob.append((char)G); // byte 1 -> mask 0x0000FF00
+          pixelDataBlob.append((char)R); // byte 2 -> mask 0x00FF0000
+          pixelDataBlob.append((char)A); // byte 3 -> mask 0xFF000000
         }
       }
     }
@@ -927,11 +925,11 @@ bool FontEditorDialog::loadFntData(const QString &filename) {
             img.setPixel(x, y, qRgb(r, g, b));
           }
         } else if (loadedBpp == 32) {
-          // RGBA
-          uint8_t r = (uint8_t)ptr[pOffset++];
-          uint8_t g = (uint8_t)ptr[pOffset++];
-          uint8_t b = (uint8_t)ptr[pOffset++];
-          uint8_t a = (uint8_t)ptr[pOffset++];
+          // Bytes are stored as B,G,R,A (little-endian of 0xAARRGGBB)
+          uint8_t b = (uint8_t)ptr[pOffset++]; // byte 0 = Blue
+          uint8_t g = (uint8_t)ptr[pOffset++]; // byte 1 = Green
+          uint8_t r = (uint8_t)ptr[pOffset++]; // byte 2 = Red
+          uint8_t a = (uint8_t)ptr[pOffset++]; // byte 3 = Alpha
           img.setPixel(x, y, qRgba(r, g, b, a));
         }
       }

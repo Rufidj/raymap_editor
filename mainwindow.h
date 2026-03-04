@@ -161,8 +161,9 @@ private slots:
   void onEntitySelected(int index, EntityInstance entity); // NEW
   void onEntityChanged(int index, EntityInstance entity);  // NEW
   void onEditEntityBehavior(
-      int index, const EntityInstance &entity); // NEW: Edit entity behavior
-  void onLightSelected(int index, Light light); // NEW
+      int index, const EntityInstance &entity);     // NEW: Edit entity behavior
+  void onEditSceneEntityBehavior(SceneEntity *ent); // NEW: Edit scene behavior
+  void onLightSelected(int index, Light light);     // NEW
   void onLightChanged(); // NEW: When light properties change
   void onSceneSelectionChanged(SceneEntity *ent); // NEW
 

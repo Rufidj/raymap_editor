@@ -854,6 +854,210 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     data.pins.append(pOut);
     data.pins.append(pTarget);
     data.pins.append(pSpeed);
+  } else if (type == "action_wait") {
+    NodePinData pIn, pOut, pSeconds;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pSeconds.pinId = m_graph.nextPinId++;
+    pSeconds.name = "Segundos";
+    pSeconds.isInput = true;
+    pSeconds.value = "1.0";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pSeconds);
+  } else if (type == "action_music") {
+    NodePinData pIn, pOut, pFile, pVolume;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pFile.pinId = m_graph.nextPinId++;
+    pFile.name = "File";
+    pFile.isInput = true;
+    pFile.value = "assets/music/bgm.ogg";
+    pVolume.pinId = m_graph.nextPinId++;
+    pVolume.name = "Volume";
+    pVolume.isInput = true;
+    pVolume.value = "128";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pFile);
+    data.pins.append(pVolume);
+  } else if (type == "action_scene") {
+    NodePinData pIn, pScene;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pScene.pinId = m_graph.nextPinId++;
+    pScene.name = "Nombre Escena";
+    pScene.isInput = true;
+    pScene.value = "Scene1";
+    data.pins.append(pIn);
+    data.pins.append(pScene);
+  } else if (type == "action_set_resolution") {
+    NodePinData pIn, pOut, pW, pH;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pW.pinId = m_graph.nextPinId++;
+    pW.name = "Ancho";
+    pW.isInput = true;
+    pW.value = "1920";
+    pH.pinId = m_graph.nextPinId++;
+    pH.name = "Alto";
+    pH.isInput = true;
+    pH.value = "1080";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pW);
+    data.pins.append(pH);
+  } else if (type == "action_set_fullscreen") {
+    NodePinData pIn, pOut, pActive;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pActive.pinId = m_graph.nextPinId++;
+    pActive.name = "Activo (0/1)";
+    pActive.isInput = true;
+    pActive.value = "1";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pActive);
+  } else if (type == "action_set_music_volume") {
+    NodePinData pIn, pOut, pVol;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pVol.pinId = m_graph.nextPinId++;
+    pVol.name = "Volumen (0-128)";
+    pVol.isInput = true;
+    pVol.value = "128";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pVol);
+  } else if (type == "action_set_sound_volume") {
+    NodePinData pIn, pOut, pVol;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pVol.pinId = m_graph.nextPinId++;
+    pVol.name = "Volumen (0-128)";
+    pVol.isInput = true;
+    pVol.value = "128";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pVol);
+  } else if (type == "action_npc_flee") {
+    NodePinData pIn, pOut, pTargetId, pSpeed;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "Ejecutar";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Siguiente";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pTargetId.pinId = m_graph.nextPinId++;
+    pTargetId.name = "ID Sprite a evitar";
+    pTargetId.isInput = true;
+    pTargetId.value = "0";
+    pSpeed.pinId = m_graph.nextPinId++;
+    pSpeed.name = "Velocidad";
+    pSpeed.isInput = true;
+    pSpeed.value = "100";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pTargetId);
+    data.pins.append(pSpeed);
+  } else if (type == "action_set_alpha") {
+    NodePinData pIn, pOut, pAlpha;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pAlpha.pinId = m_graph.nextPinId++;
+    pAlpha.name = "Alpha (0-255)";
+    pAlpha.isInput = true;
+    pAlpha.value = "255";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pAlpha);
+  } else if (type == "action_set_scale") {
+    NodePinData pIn, pOut, pScale;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pScale.pinId = m_graph.nextPinId++;
+    pScale.name = "Escala (%)";
+    pScale.isInput = true;
+    pScale.value = "100";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pScale);
+  } else if (type == "action_stop_music") {
+    NodePinData pIn, pOut;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+  } else if (type == "action_stop_sound") {
+    NodePinData pIn, pOut;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    data.pins.append(pIn);
+    data.pins.append(pOut);
   }
 
   m_graph.nodes.append(data);
@@ -1041,12 +1245,36 @@ void BehaviorNodeScene::contextMenuEvent(
   actions->addAction("Cambiar Texto UI", [this, event]() {
     addNode("action_set_ui_text", event->scenePos());
   });
+  actions->addAction("Esperar (Wait)", [this, event]() {
+    addNode("action_wait", event->scenePos());
+  });
+  actions->addAction("Reproducir Música", [this, event]() {
+    addNode("action_music", event->scenePos());
+  });
+  actions->addAction("Detener Música", [this, event]() {
+    addNode("action_stop_music", event->scenePos());
+  });
+  actions->addAction("Detener Sonidos/Sfx", [this, event]() {
+    addNode("action_stop_sound", event->scenePos());
+  });
+  actions->addAction("Cambiar de Escena", [this, event]() {
+    addNode("action_scene", event->scenePos());
+  });
+  actions->addAction("Cambiar Transparencia (Alpha)", [this, event]() {
+    addNode("action_set_alpha", event->scenePos());
+  });
+  actions->addAction("Cambiar Escala (Size)", [this, event]() {
+    addNode("action_set_scale", event->scenePos());
+  });
   actions->addSeparator();
   actions->addAction("Activar/Desactivar Ruta NPC", [this, event]() {
     addNode("action_set_path_active", event->scenePos());
   });
   actions->addAction("Perseguir Objetivo (NPC)", [this, event]() {
     addNode("action_npc_chase", event->scenePos());
+  });
+  actions->addAction("Huir de Objetivo (NPC)", [this, event]() {
+    addNode("action_npc_flee", event->scenePos());
   });
 
   QMenu *logic = menu.addMenu("Lógica");
@@ -1068,6 +1296,20 @@ void BehaviorNodeScene::contextMenuEvent(
   });
   logic->addAction("Ángulo entre Sprites", [this, event]() {
     addNode("math_angle", event->scenePos());
+  });
+
+  QMenu *system = menu.addMenu("Sistema");
+  system->addAction("Cambiar Resolución", [this, event]() {
+    addNode("action_set_resolution", event->scenePos());
+  });
+  system->addAction("Pantalla Completa", [this, event]() {
+    addNode("action_set_fullscreen", event->scenePos());
+  });
+  system->addAction("Volumen Música", [this, event]() {
+    addNode("action_set_music_volume", event->scenePos());
+  });
+  system->addAction("Volumen Sonidos", [this, event]() {
+    addNode("action_set_sound_volume", event->scenePos());
   });
   logic->addAction("Ángulo a Cámara", [this, event]() {
     addNode("math_camera_angle", event->scenePos());

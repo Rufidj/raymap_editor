@@ -267,6 +267,18 @@ void MainWindow::onGenerateCode() {
   for (const auto &ent : entities) {
     if (!ent.assetPath.isEmpty())
       currentMapResources.insert(ent.assetPath);
+
+    // Collect resources from behavior graphs of 3D entities
+    for (const auto &node : ent.behaviorGraph.nodes) {
+      if (node.type == "action_music") {
+        for (const auto &pin : node.pins) {
+          if (pin.isInput && !pin.isExecution && !pin.value.isEmpty() &&
+              pin.value.contains("assets/")) {
+            currentMapResources.insert(pin.value);
+          }
+        }
+      }
+    }
   }
   if (!fpgPath.isEmpty())
     currentMapResources.insert(fpgPath);

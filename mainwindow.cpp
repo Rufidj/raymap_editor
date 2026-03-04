@@ -5,6 +5,7 @@
 
 #include "mainwindow.h"
 #include "assetbrowser.h"
+#include "behaviornodeeditor.h"
 #include "buildmanager.h"
 #include "camerapatheditor.h"
 #include "effectgeneratordialog.h"
@@ -4414,6 +4415,22 @@ void MainWindow::onEditEntityBehavior(int index, const EntityInstance &entity) {
   }
 }
 
+void MainWindow::onEditSceneEntityBehavior(SceneEntity *ent) {
+  if (!ent)
+    return;
+  BehaviorNodeEditor editor(ent->behaviorGraph,
+                            m_projectManager->getProjectPath(), this);
+  editor.setWindowTitle(tr("Nodos de Comportamiento - %1").arg(ent->name));
+  if (editor.exec() == QDialog::Accepted) {
+    // Scene entity is updated in-place via reference to its behaviorGraph
+    SceneEditor *sceneEditor =
+        qobject_cast<SceneEditor *>(m_tabWidget->currentWidget());
+    if (sceneEditor) {
+      sceneEditor->triggerSceneChanged();
+    }
+  }
+}
+
 void MainWindow::onEntityChanged(int index, EntityInstance entity) {
   GridEditor *editor = getCurrentEditor();
   if (editor) {
@@ -4483,6 +4500,7 @@ void MainWindow::onOpenScene(const QString &path) {
     m_tabWidget->setCurrentIndex(idx);
 
     editor->setEntityTree(m_sceneEntitiesTree);
+    editor->setProjectPath(m_projectManager->getProjectPath());
     updateSceneEntityTree(editor);
 
     // Connect Signals
@@ -4498,6 +4516,8 @@ void MainWindow::onOpenScene(const QString &path) {
 
     connect(editor, &SceneEditor::entitySelected, this,
             &MainWindow::onSceneSelectionChanged);
+    connect(editor, &SceneEditor::requestEditEntityBehavior, this,
+            &MainWindow::onEditSceneEntityBehavior);
 
     m_sceneEntitiesDock->raise();
   } else {

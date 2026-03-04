@@ -1,6 +1,8 @@
 #ifndef SCENEEDITOR_H
 #define SCENEEDITOR_H
 
+#include "mapdata.h"
+#include <QByteArray>
 #include <QFile>
 #include <QGraphicsItem>
 #include <QGraphicsPixmapItem>
@@ -51,6 +53,11 @@ struct SceneEntity {
   // Logic
   QString script;  // Attached .prg behavior
   QString onClick; // Simple One-Liner Action (e.g. change_scene("game"))
+
+  // ===== BEHAVIOR SYSTEM =====
+  EntityInstance::ActivationType activationType =
+      EntityInstance::ACTIVATION_ON_START;
+  BehaviorGraph behaviorGraph;
 
   // Manual Hitbox (Overrides Graphic Bounds)
   int hitW = 0; // 0 = Auto
@@ -176,6 +183,9 @@ public slots:
   void resetZoom();
   void showGrid(bool show);
 
+  void setProjectPath(const QString &path) { m_projectPath = path; }
+  void triggerSceneChanged() { emit sceneChanged(); }
+
 signals:
   void entitySelected(SceneEntity *ent);
   void editLogicRequested();
@@ -184,6 +194,7 @@ signals:
   void sceneSaved(const QString &scenePath); // NEW signal
   void sceneChanged();                       // NEW: Signal for realtime updates
   void entityContextMenuRequested(SceneEntity *ent, QPoint globalPos);
+  void requestEditEntityBehavior(SceneEntity *ent);
 
 protected:
   void drawBackground(QPainter *painter, const QRectF &rect) override;
@@ -207,6 +218,7 @@ private:
 
   SceneData m_data;
   QString m_currentFile;
+  QString m_projectPath;
 
   bool m_showGrid = true;
   int m_gridSize = 32;

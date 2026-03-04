@@ -582,6 +582,37 @@ bool CodeGenerator::loadSceneJson(const QString &path, SceneData &data) {
       ent->sourceFile = obj["sourceFile"].toString();
     }
 
+    // Behavior Graph Deserialization (MUST match SceneEditor::loadScene)
+    if (obj.contains("behaviorGraph")) {
+      QJsonObject graphObj = obj["behaviorGraph"].toObject();
+      ent->behaviorGraph.nextNodeId = graphObj["nextNodeId"].toInt(1);
+      ent->behaviorGraph.nextPinId = graphObj["nextPinId"].toInt(1);
+      QJsonArray nodesArr = graphObj["nodes"].toArray();
+      for (const QJsonValue &nodeVal : nodesArr) {
+        QJsonObject nodeObj = nodeVal.toObject();
+        NodeData node;
+        node.nodeId = nodeObj["nodeId"].toInt();
+        node.type = nodeObj["type"].toString();
+        node.x = nodeObj["x"].toDouble();
+        node.y = nodeObj["y"].toDouble();
+        QJsonArray pinsArr = nodeObj["pins"].toArray();
+        for (const QJsonValue &pinVal : pinsArr) {
+          QJsonObject pinObj = pinVal.toObject();
+          NodePinData pin;
+          pin.pinId = pinObj["pinId"].toInt();
+          pin.name = pinObj["name"].toString();
+          pin.isInput = pinObj["isInput"].toBool();
+          pin.isExecution = pinObj["isExecution"].toBool();
+          pin.value = pinObj["value"].toString();
+          QJsonArray linksArr = pinObj["links"].toArray();
+          for (const QJsonValue &linkVal : linksArr)
+            pin.linkedPinIds.append(linkVal.toInt());
+          node.pins.append(pin);
+        }
+        ent->behaviorGraph.nodes.append(node);
+      }
+    }
+
     // Visual Item (NONE) in generator
     ent->item = nullptr;
 
@@ -753,34 +784,89 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   code += "\n    // Instantiate Entities\n";
   for (auto ent : data.entities) {
     if (ent->type == ENTITY_SPRITE) {
+      QString resVar = resMap.value(ent->sourceFile, "0");
+      QString ext = QFileInfo(ent->sourceFile).suffix().toLower();
       QString processName = ent->script.isEmpty()
                                 ? "StaticSprite"
                                 : QFileInfo(ent->script).baseName();
 
+      if (!ent->behaviorGraph.nodes.isEmpty()) {
+        // Force a custom auto-generated process for sprites with logic
+        processName = QString("Auto_Sprite_%1_%2")
+                          .arg(sceneName)
+                          .arg(currentInteractiveIdx++);
+        processName =
+            processName.replace(" ", "_").replace("-", "_").replace(".", "_");
+
+        QString spriteProc;
+        spriteProc += QString("PROCESS %1()\n").arg(processName);
+        spriteProc += "PRIVATE\n";
+        spriteProc += "    int s_id, behavior_timer;\n";
+        spriteProc += "BEGIN\n";
+        spriteProc += "    file = 0; graph = 0;\n";
+        if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" ||
+            ext == "tga") {
+          spriteProc += QString("    graph = %1;\n").arg(resVar);
+        } else {
+          spriteProc += QString("    file = %1; graph = %2;\n")
+                            .arg(resVar)
+                            .arg(ent->graphId);
+        }
+        spriteProc += QString("    x = %1; y = %2; z = %3;\n")
+                          .arg(ent->x)
+                          .arg(ent->y)
+                          .arg(ent->z);
+        spriteProc += QString("    angle = %1; size_x = %2; size_y = %3;\n")
+                          .arg(int(ent->angle * 1000))
+                          .arg(int(ent->scaleX * 100))
+                          .arg(int(ent->scaleY * 100));
+
+        // Inject Graph Logic (On Start)
+        EntityInstance dummy;
+        dummy.processName = processName;
+        QString onStart = ProcessGenerator::generateGraphCode(
+            dummy, ent->behaviorGraph, "event_start");
+        if (!onStart.isEmpty()) {
+          spriteProc += "    // Behavior (Start)\n";
+          spriteProc += "    " + onStart.replace("\n", "\n    ") + "\n";
+        }
+
+        spriteProc += "    loop\n";
+        QString onUpdate = ProcessGenerator::generateGraphCode(
+            dummy, ent->behaviorGraph, "event_update");
+        if (!onUpdate.isEmpty()) {
+          spriteProc +=
+              "        " + onUpdate.replace("\n", "\n        ") + "\n";
+        }
+        spriteProc += "        frame;\n";
+        spriteProc += "    end\n";
+        spriteProc += "END\n\n";
+        m_inlineScenes += spriteProc;
+      }
+
       code += QString("    // Entity: %1\n").arg(ent->name);
       code += QString("    ent_id = %1();\n").arg(processName);
 
-      QString resVar = resMap.value(ent->sourceFile, "0");
-      QString ext = QFileInfo(ent->sourceFile).suffix().toLower();
+      if (ent->behaviorGraph.nodes.isEmpty()) {
+        if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" ||
+            ext == "tga") {
+          code += "    ent_id.file = 0;\n";
+          code += QString("    ent_id.graph = %1;\n").arg(resVar);
+        } else {
+          code += QString("    ent_id.file = %1;\n").arg(resVar);
+          code += QString("    ent_id.graph = %1;\n").arg(ent->graphId);
+        }
 
-      if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" ||
-          ext == "tga") {
-        code += "    ent_id.file = 0;\n";
-        code += QString("    ent_id.graph = %1;\n").arg(resVar);
-      } else {
-        code += QString("    ent_id.file = %1;\n").arg(resVar);
-        code += QString("    ent_id.graph = %1;\n").arg(ent->graphId);
+        code += QString("    ent_id.x = %1; ent_id.y = %2; ent_id.z = %3;\n")
+                    .arg(ent->x)
+                    .arg(ent->y)
+                    .arg(ent->z);
+        code += QString("    ent_id.angle = %1; ent_id.size_x = %2; "
+                        "ent_id.size_y = %3;\n")
+                    .arg(int(ent->angle * 1000))
+                    .arg(int(ent->scaleX * 100))
+                    .arg(int(ent->scaleY * 100));
       }
-
-      code += QString("    ent_id.x = %1; ent_id.y = %2; ent_id.z = %3;\n")
-                  .arg(ent->x)
-                  .arg(ent->y)
-                  .arg(ent->z);
-      code += QString("    ent_id.angle = %1; ent_id.size_x = %2; "
-                      "ent_id.size_y = %3;\n")
-                  .arg(int(ent->angle * 1000))
-                  .arg(int(ent->scaleX * 100))
-                  .arg(int(ent->scaleY * 100));
 
       if (!ent->onClick.isEmpty()) {
         QString vName = QString("i_ent_%1").arg(currentInteractiveIdx++);
@@ -826,16 +912,29 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
       btnCode += "PRIVATE\n";
       btnCode += "    int txt_id;\n";
       btnCode += "    int w, h;\n";
-      btnCode += "    int my_x, my_y;\n";
+      btnCode += "    int my_x, my_y, my_align;\n";
+      btnCode += "    int s_id, behavior_timer;\n";
       btnCode += "begin\n";
-      btnCode += QString("    my_x = %1; my_y = %2;\n")
+      btnCode += QString("    my_x = %1; my_y = %2; my_align = %3;\n")
                      .arg(int(ent->x))
-                     .arg(int(ent->y));
+                     .arg(int(ent->y))
+                     .arg(ent->alignment);
       btnCode += "    z = -500;\n"; // Force foreground
+
+      // Inject Graph Logic (On Start)
+      EntityInstance dummy;
+      dummy.processName = btnProcName;
+      QString onStart = ProcessGenerator::generateGraphCode(
+          dummy, ent->behaviorGraph, "event_start");
+      if (!onStart.isEmpty()) {
+        btnCode += "    // Behavior (Start)\n";
+        btnCode += "    " + onStart.replace("\n", "\n    ") + "\n";
+      }
+
       // Note: write returns the text ID
       btnCode +=
-          QString("    txt_id = write(font_id, my_x, my_y, %1, \"%2\");\n")
-              .arg(ent->alignment)
+          QString(
+              "    txt_id = write(font_id, my_x, my_y, my_align, \"%2\");\n")
               .arg(ent->text);
       btnCode +=
           QString("    w = text_width(font_id, \"%1\");\n").arg(ent->text);
@@ -863,6 +962,12 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
         btnCode += "        end\n";
       }
 
+      // Inject Graph Logic (On Update)
+      QString onUpdate = ProcessGenerator::generateGraphCode(
+          dummy, ent->behaviorGraph, "event_update");
+      if (!onUpdate.isEmpty()) {
+        btnCode += "        " + onUpdate.replace("\n", "\n        ") + "\n";
+      }
       btnCode += "        frame;\n";
       btnCode += "    end\n"; // End Loop
       btnCode += "OnExit:\n";
@@ -1299,6 +1404,13 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
       auto fix = [&](QString path) -> QString {
         if (path.isEmpty())
           return QString();
+        path.remove("\""); // Remove quotes early
+
+        // If it's already a clean project-relative path, don't mess with it
+        if (path.startsWith("assets/") || path.startsWith("assets\\")) {
+          return path.replace("\\", "/");
+        }
+
         QFileInfo info(path);
         QString absPath = info.isRelative()
                               ? QFileInfo(sceneDir, path).absoluteFilePath()
@@ -1310,13 +1422,13 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
           if (!rel.startsWith("assets/") && rel.contains("assets/")) {
             rel = rel.mid(rel.indexOf("assets/"));
           }
-          return rel;
+          return rel.replace("\\", "/");
         }
         int assetsIdx = absPath.lastIndexOf("assets/");
         if (assetsIdx != -1)
-          return absPath.mid(assetsIdx);
+          return absPath.mid(assetsIdx).replace("\\", "/");
 
-        return projDir.relativeFilePath(absPath);
+        return projDir.relativeFilePath(absPath).replace("\\", "/");
       };
 
       if (!data.cursorFile.isEmpty()) {
@@ -1335,6 +1447,19 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
         if (!ent->fontFile.isEmpty()) {
           ent->fontFile = fix(ent->fontFile);
           allProjectResources.insert(ent->fontFile);
+        }
+
+        // Collect ALL resources from behavior graphs (music, sounds, etc.)
+        for (const auto &node : ent->behaviorGraph.nodes) {
+          for (const auto &pin : node.pins) {
+            if (pin.isInput && !pin.isExecution && !pin.value.isEmpty()) {
+              QString val = pin.value;
+              if (val.contains("assets/", Qt::CaseInsensitive) ||
+                  val.contains("assets\\", Qt::CaseInsensitive)) {
+                allProjectResources.insert(fix(val));
+              }
+            }
+          }
         }
       }
 
@@ -1417,7 +1542,17 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
     QMap<QString, QString> resMap;
     for (const QString &res : allProjectResources) {
       QString cleanName = QFileInfo(res).baseName().toLower();
-      cleanName = cleanName.replace(".", "_").replace(" ", "_");
+      cleanName = cleanName.replace(" ", "_")
+                      .replace("-", "_")
+                      .replace(".", "_")
+                      .replace("[", "_")
+                      .replace("]", "_")
+                      .replace("(", "_")
+                      .replace(")", "_");
+      // Ensure it starts with a letter if somehow emptied or starting with
+      // numbers
+      if (cleanName.isEmpty() || !cleanName[0].isLetter())
+        cleanName = "res_" + cleanName;
       QString ext = QFileInfo(res).suffix().toLower();
       QString varName = "id_" + cleanName + "_" + ext;
       resMap[res] = varName;
@@ -1433,8 +1568,10 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
       QString ext = QFileInfo(res).suffix().toLower();
 
       QString loadFunc;
-      if (ext == "fpg" || ext == "map" || ext == "png" || ext == "jpg" ||
-          ext == "jpeg" || ext == "bmp" || ext == "tga")
+      if (ext == "fpg")
+        loadFunc = "fpg_load";
+      else if (ext == "map" || ext == "png" || ext == "jpg" || ext == "jpeg" ||
+               ext == "bmp" || ext == "tga")
         loadFunc = "map_load";
       else if (ext == "fnt" || ext == "fnx")
         loadFunc = "fnt_load";

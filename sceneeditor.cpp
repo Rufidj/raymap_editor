@@ -593,6 +593,38 @@ bool SceneEditor::loadScene(const QString &fileName) {
               .cleanPath(QDir(sceneInfo.absolutePath()).filePath(srcRel));
     }
 
+    // Behavior Graph Deserialization
+    if (obj.contains("behaviorGraph")) {
+      QJsonObject graphObj = obj["behaviorGraph"].toObject();
+      ent->behaviorGraph.nextNodeId = graphObj["nextNodeId"].toInt(1);
+      ent->behaviorGraph.nextPinId = graphObj["nextPinId"].toInt(1);
+      QJsonArray nodesArr = graphObj["nodes"].toArray();
+      for (const QJsonValue &nodeVal : nodesArr) {
+        QJsonObject nodeObj = nodeVal.toObject();
+        NodeData node;
+        node.nodeId = nodeObj["nodeId"].toInt();
+        node.type = nodeObj["type"].toString();
+        node.x = nodeObj["x"].toDouble();
+        node.y = nodeObj["y"].toDouble();
+        QJsonArray pinsArr = nodeObj["pins"].toArray();
+        for (const QJsonValue &pinVal : pinsArr) {
+          QJsonObject pinObj = pinVal.toObject();
+          NodePinData pin;
+          pin.pinId = pinObj["pinId"].toInt();
+          pin.name = pinObj["name"].toString();
+          pin.isInput = pinObj["isInput"].toBool();
+          pin.isExecution = pinObj["isExecution"].toBool();
+          pin.value = pinObj["value"].toString();
+          QJsonArray linksArr = pinObj["links"].toArray();
+          for (const QJsonValue &linkVal : linksArr) {
+            pin.linkedPinIds.append(linkVal.toInt());
+          }
+          node.pins.append(pin);
+        }
+        ent->behaviorGraph.nodes.append(node);
+      }
+    }
+
     // Visual Item (Common)
     SceneEntityItem *item = new SceneEntityItem(ent);
     m_scene->addItem(item);
@@ -690,6 +722,37 @@ bool SceneEditor::saveScene(const QString &fileName) {
       obj["sourceFile"] =
           QDir(QFileInfo(fileName).path()).relativeFilePath(ent->sourceFile);
     }
+
+    // Behavior Graph Serialization
+    QJsonObject graphObj;
+    graphObj["nextNodeId"] = ent->behaviorGraph.nextNodeId;
+    graphObj["nextPinId"] = ent->behaviorGraph.nextPinId;
+    QJsonArray nodesArr;
+    for (const auto &node : ent->behaviorGraph.nodes) {
+      QJsonObject nodeObj;
+      nodeObj["nodeId"] = node.nodeId;
+      nodeObj["type"] = node.type;
+      nodeObj["x"] = (double)node.x;
+      nodeObj["y"] = (double)node.y;
+      QJsonArray pinsArr;
+      for (const auto &pin : node.pins) {
+        QJsonObject pinObj;
+        pinObj["pinId"] = pin.pinId;
+        pinObj["name"] = pin.name;
+        pinObj["isInput"] = pin.isInput;
+        pinObj["isExecution"] = pin.isExecution;
+        pinObj["value"] = pin.value;
+        QJsonArray linksArr;
+        for (int lid : pin.linkedPinIds)
+          linksArr.append(lid);
+        pinObj["links"] = linksArr;
+        pinsArr.append(pinObj);
+      }
+      nodeObj["pins"] = pinsArr;
+      nodesArr.append(nodeObj);
+    }
+    graphObj["nodes"] = nodesArr;
+    obj["behaviorGraph"] = graphObj;
 
     entitiesArray.append(obj);
   }
@@ -1141,7 +1204,13 @@ void SceneEditor::contextMenuEvent(QContextMenuEvent *event) {
     }
   });
 
-  // Special Edit for Navigation Buttons (Text + onClick)
+  menu.addSeparator();
+  QAction *nodeAction = menu.addAction(QIcon::fromTheme("system-run"),
+                                       "Editar Comportamiento (Nodos)...");
+  connect(nodeAction, &QAction::triggered, this,
+          [this, ent]() { emit requestEditEntityBehavior(ent); });
+
+  menu.addSeparator();
   if (ent->type == ENTITY_TEXT) {
     QString label = ent->onClick.isEmpty()
                         ? "Convertir en Botón de Navegación..."

@@ -40,6 +40,7 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
     out << "    int s_id;\n";
     out << "    double d_dist;\n";
     out << "    int behavior_timer;\n";
+    out << "    int _npc_ang;\n"; // Used by action_npc_chase / action_npc_flee
     out << "    int current_anim_start, current_anim_end, "
            "current_anim_speed;\n";
     out << "    int anim_current_frame, anim_next_frame;\n";
@@ -440,6 +441,7 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
   out << "    double dx, dy, dz, d_dist;\n";
   out << "    double angle_to_target;\n";
   out << "    int behavior_timer;\n";
+  out << "    int _npc_ang;\n"; // Used by action_npc_chase / action_npc_flee
 
   out << "begin\n";
   out << "    car_engine_id = 0;\n";
@@ -1246,23 +1248,24 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   out << "        *cur_z = target_z;\n";
   out << "    end\n\n";
 
-  out << "    // Smooth Rotation Logic\n";
+  out << "    // Rotation: face direction of movement\n";
   out << "    if (look_angle > -0.9) // If look_angle is set (not the -1.0 "
          "magic value)\n";
-  out << "        dx = look_angle * 0.01745329; // Degrees to Radians\n";
+  out << "        target_x = look_angle * 0.01745329; // Degrees to Radians\n";
   out << "    elseif (d_dist > 5.0)\n";
-  out << "        dx = atan2(dy, dx) * 0.01745329; // Degrees to Radians\n";
+  out << "        target_x = atan2(-dy, dx); // Negate Y to match engine "
+         "coordinate system\n";
   out << "    else\n";
-  out << "        dx = *cur_angle;\n";
+  out << "        target_x = *cur_angle;\n";
   out << "    end\n";
   out << "    \n";
-  out << "    // Correct angular difference for smooth Lerp (handles 0-360 "
+  out << "    // Correct angular difference for smooth Lerp (handles 0-2PI "
          "wrap)\n";
-  out << "    dy = dx - *cur_angle; \n";
-  out << "    while (dy > 3.14159) dy = dy - 6.28318; end\n";
-  out << "    while (dy < -3.14159) dy = dy + 6.28318; end\n";
-  out << "    *cur_angle = *cur_angle + (dy * 0.15); // Smooth turn (15% per "
-         "frame)\n";
+  out << "    target_y = target_x - *cur_angle; \n";
+  out << "    while (target_y > 3.14159) target_y = target_y - 6.28318; end\n";
+  out << "    while (target_y < -3.14159) target_y = target_y + 6.28318; end\n";
+  out << "    *cur_angle = *cur_angle + (target_y * 0.15); // Smooth turn (15% "
+         "per frame)\n";
   out << "  end\n";
   out << "end\n";
 
@@ -1386,8 +1389,32 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       QString ty = res.resolve(current->pins[3].pinId);
       out << ind << " world_x = " << tx << "; world_y = " << ty << ";\n";
       out << ind
+          << " my_x = world_x; my_y = world_y; // Update UI pos if text\n";
+      out << ind
           << " RAY_UPDATE_SPRITE_POSITION(sprite_id, world_x, world_y, "
              "world_z);\n";
+    } else if (current->type == "action_stop_music") {
+      out << ind << " music_stop();\n";
+    } else if (current->type == "action_stop_sound") {
+      out << ind << " sound_stop(0); // Stop all sounds\n";
+    } else if (current->type == "action_npc_chase") {
+      QString target = res.resolve(current->pins[2].pinId);
+      QString speed = res.resolve(current->pins[3].pinId);
+      out << ind << " if (exists(" << target << "))\n";
+      out << ind << "     _npc_ang = fget_angle(x, y, " << target << ".x, "
+          << target << ".y);\n";
+      out << ind << "     x += get_distx(_npc_ang, " << speed << ");\n";
+      out << ind << "     y += get_disty(_npc_ang, " << speed << ");\n";
+      out << ind << " end\n";
+    } else if (current->type == "action_npc_flee") {
+      QString target = res.resolve(current->pins[2].pinId);
+      QString speed = res.resolve(current->pins[3].pinId);
+      out << ind << " if (exists(" << target << "))\n";
+      out << ind << "     _npc_ang = fget_angle(x, y, " << target << ".x, "
+          << target << ".y) + 180000;\n";
+      out << ind << "     x += get_distx(_npc_ang, " << speed << ");\n";
+      out << ind << "     y += get_disty(_npc_ang, " << speed << ");\n";
+      out << ind << " end\n";
     } else if (current->type == "action_sound") {
       QString file = res.resolve(current->pins[2].pinId);
       QString loops = res.resolve(current->pins[4].pinId);
@@ -1443,9 +1470,59 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       out << ind << "     anim_current_frame = 0; anim_next_frame = 1;\n";
       out << ind << "     anim_interpolation = 0.0;\n";
       out << ind << " end\n";
+    } else if (current->type == "action_wait") {
+      QString secs = res.resolve(current->pins[2].pinId);
+      out << ind << " behavior_timer = (" << secs << ") * 60;\n";
+      out << ind << " while(behavior_timer > 0) behavior_timer--; frame; end\n";
+    } else if (current->type == "action_music") {
+      QString file = res.resolve(current->pins[2].pinId);
+      file.remove("\"");
+      QString vol = res.resolve(current->pins[3].pinId);
+      out << ind << " s_id = music_load(\"" << file << "\");\n";
+      out << ind << " if (s_id > 0) music_play(s_id, -1); music_set_volume("
+          << vol << "); end\n";
+    } else if (current->type == "action_scene") {
+      QString sceneName = res.resolve(current->pins[1].pinId);
+      // Remove quotes if present from resolver to avoid double quotes
+      sceneName.remove("\"");
+      out << ind << " goto_scene(\"" << sceneName << "\");\n";
+    } else if (current->type == "action_set_alpha") {
+      QString alphaVal = res.resolve(current->pins[2].pinId);
+      out << ind << " flags = " << alphaVal << "; // Set transparency\n";
+      out << ind << " if (sprite_id >= 0) RAY_SET_SPRITE_FLAGS(sprite_id, "
+          << alphaVal << "); end\n";
+    } else if (current->type == "action_set_scale") {
+      QString scaleVal = res.resolve(current->pins[2].pinId);
+      out << ind << " size = " << scaleVal << "; // Set UI size\n";
+      out << ind << " if (sprite_id >= 0) RAY_SET_SPRITE_SCALE(sprite_id, ("
+          << scaleVal << ") / 100.0 * " << entity.scale << "); end\n";
     } else if (current->type == "action_set_path_active") {
       out << ind << " npc_path_active = " << res.resolve(current->pins[2].pinId)
           << ";\n";
+    } else if (current->type == "action_set_resolution") {
+      QString w = res.resolve(current->pins[2].pinId);
+      QString h = res.resolve(current->pins[3].pinId);
+      out << ind << " screen_w = " << w << "; screen_h = " << h
+          << "; set_mode(screen_w, screen_h, 32);\n";
+    } else if (current->type == "action_set_fullscreen") {
+      QString val = res.resolve(current->pins[2].pinId);
+      out << ind << " full_screen = " << val
+          << "; set_mode(screen_w, screen_h, 32);\n";
+    } else if (current->type == "action_set_music_volume") {
+      QString vol = res.resolve(current->pins[2].pinId);
+      out << ind << " music_set_volume(" << vol << ");\n";
+    } else if (current->type == "action_set_sound_volume") {
+      QString vol = res.resolve(current->pins[2].pinId);
+      out << ind << " sound_set_volume(" << vol << ");\n";
+    } else if (current->type == "action_set_ui_text") {
+      QString target = res.resolve(current->pins[2].pinId);
+      QString newText = res.resolve(current->pins[3].pinId);
+      // For now, we assume "Self" (it's the most common for UI toggles)
+      out << ind << " write_delete(txt_id);\n";
+      out << ind << " txt_id = write(font_id, my_x, my_y, my_align, " << newText
+          << ");\n";
+      out << ind << " w = text_width(font_id, " << newText << ");\n";
+      out << ind << " h = text_height(font_id, " << newText << ");\n";
     }
 
     if (current->type == "logic_if") {

@@ -26,11 +26,14 @@ struct ObjMaterial {
   QImage textureImage; // For embedded textures (GLB)
   bool hasTexture = false;
 
-  // UV remapping for atlas
+  // UV remapping for atlas / KHR_texture_transform
   QVector2D uvScale = QVector2D(1.0f, 1.0f);
   QVector2D uvOffset = QVector2D(0.0f, 0.0f);
+  float uvRotation = 0.0f; // KHR_texture_transform rotation (radians)
   bool useAtlasPadding = false;
-  int glbImageIdx = -1; // New field to track shared texture source in GLB
+  int glbImageIdx = -1; // tracks shared texture source in GLB
+  int glbTexCoordSet =
+      0; // which TEXCOORD_N to use (0=TEXCOORD_0, 1=TEXCOORD_1...)
 };
 
 class ObjToMd3Converter {

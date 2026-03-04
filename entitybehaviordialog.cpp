@@ -622,7 +622,7 @@ void EntityBehaviorDialog::onAccept() {
   m_entity.physicsCollisionMask = m_collisionMaskSpin->value();
 
   // Model Animation
-  if (m_entity.type == "model") {
+  if (m_entity.type == "model" || m_entity.type == "gltf") {
     m_entity.startGraph = m_startFrameSpin->value();
     m_entity.endGraph = m_endFrameSpin->value();
     if (m_playAnimCheck->isChecked()) {

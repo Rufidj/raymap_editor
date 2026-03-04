@@ -401,13 +401,39 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
                        qBound(0, (int)(f[2].toDouble() * 255), 255));
       }
       if (pbr.contains("baseColorTexture")) {
-        int tIdx = pbr["baseColorTexture"].toObject()["index"].toInt(-1);
+        QJsonObject baseColorTexObj = pbr["baseColorTexture"].toObject();
+        int tIdx = baseColorTexObj["index"].toInt(-1);
+        m.glbTexCoordSet =
+            baseColorTexObj["texCoord"].toInt(0); // Which TEXCOORD set to use
         if (tIdx >= 0 && tIdx < textures.size()) {
           int sIdx = textures[tIdx].toObject()["source"].toInt(-1);
           if (sIdx >= 0 && sIdx < loadedImages.size()) {
             m.textureImage = loadedImages[sIdx];
             m.hasTexture = !m.textureImage.isNull();
             m.glbImageIdx = sIdx;
+          }
+          // Parse KHR_texture_transform extension
+          QJsonObject extObj = baseColorTexObj["extensions"].toObject();
+          if (extObj.contains("KHR_texture_transform")) {
+            QJsonObject xfm = extObj["KHR_texture_transform"].toObject();
+            if (xfm.contains("offset")) {
+              QJsonArray off = xfm["offset"].toArray();
+              m.uvOffset =
+                  QVector2D(off[0].toDouble(0.0), off[1].toDouble(0.0));
+            }
+            if (xfm.contains("scale")) {
+              QJsonArray sc = xfm["scale"].toArray();
+              m.uvScale = QVector2D(sc[0].toDouble(1.0), sc[1].toDouble(1.0));
+            }
+            if (xfm.contains("rotation")) {
+              m.uvRotation = (float)xfm["rotation"].toDouble(0.0);
+            }
+            if (xfm.contains("texCoord")) {
+              m.glbTexCoordSet = xfm["texCoord"].toInt(m.glbTexCoordSet);
+            }
+            qDebug() << "GLB: KHR_texture_transform for mat" << name << "offset"
+                     << m.uvOffset << "scale" << m.uvScale << "rotation"
+                     << m.uvRotation << "texCoordSet" << m.glbTexCoordSet;
           }
         }
       }
@@ -549,14 +575,31 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
       QJsonObject attrs = prim["attributes"].toObject();
 
       int posIdx = attrs["POSITION"].toInt(-1);
-      int uvIdx = attrs["TEXCOORD_0"].toInt(-1);
+      int matIdx = prim["material"].toInt(-1);
+
+      // Determine which TEXCOORD set this material wants
+      int texCoordSet = 0;
+      if (matIdx >= 0 && matIdx < m_materialNames.size()) {
+        const ObjMaterial &mat = m_materials[m_materialNames[matIdx]];
+        texCoordSet = mat.glbTexCoordSet;
+      }
+      QString texCoordAttr = QString("TEXCOORD_%1").arg(texCoordSet);
+      int uvIdx = attrs.contains(texCoordAttr) ? attrs[texCoordAttr].toInt(-1)
+                                               : attrs["TEXCOORD_0"].toInt(-1);
       int jointIdx = attrs["JOINTS_0"].toInt(-1);
       int weightIdx = attrs["WEIGHTS_0"].toInt(-1);
       int indicesIdx = prim["indices"].toInt(-1);
-      int matIdx = prim["material"].toInt(-1);
 
       if (posIdx == -1)
         continue;
+
+      // Fallback: if no material assigned and we only have one, use it
+      if (matIdx == -1 && m_materialNames.size() == 1)
+        matIdx = 0;
+
+      qDebug() << "  GLB Primitive: node" << nIdx << "matIdx" << matIdx
+               << "posAccessor" << posIdx << "uvAccessor" << uvIdx
+               << "indicesAccessor" << indicesIdx;
 
       int vCount, vCompType, vStride;
       const char *vDataRaw =
@@ -572,6 +615,21 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
                        : nullptr;
       if (uvRaw && uvStride == 0)
         uvStride = (uvCompType == 5126 ? 8 : (uvCompType == 5123 ? 4 : 2));
+
+      // Diagnostic: show raw UV values to detect parsing errors
+      if (uvRaw && uvCount > 0) {
+        qDebug() << "  UV Accessor" << uvIdx << "count=" << uvCount
+                 << "compType=" << uvCompType << "stride=" << uvStride;
+        for (int d = 0; d < qMin(5, uvCount); ++d) {
+          const char *p = uvRaw + d * uvStride;
+          float du = 0, dv = 0;
+          if (uvCompType == 5126) {
+            du = reinterpret_cast<const float *>(p)[0];
+            dv = reinterpret_cast<const float *>(p)[1];
+          }
+          qDebug() << "    UV[" << d << "] =" << du << dv;
+        }
+      }
 
       int jointsCount = 0, jointsCompType = 0, jointsStride = 0;
       const char *jointsRaw =
@@ -605,7 +663,9 @@ bool ObjToMd3Converter::loadGlb(const QString &filename) {
             u = reinterpret_cast<const quint16 *>(uvPtr)[0] / 65535.f;
             v = reinterpret_cast<const quint16 *>(uvPtr)[1] / 65535.f;
           }
-          v = 1.0f - v; // Flip V for MD3
+          // Do NOT flip V: BennuGD renderer uses image-space coords (V=0 at
+          // top) same as GLTF/Blender. A flip checkbox in the UI handles edge
+          // cases.
         }
         m_finalTexCoords.append(QVector2D(u, v));
 
@@ -825,12 +885,20 @@ bool ObjToMd3Converter::saveMd3(const QString &filename, float scale,
     out.writeRawData(shaderNameBuf, 64);
     out << (int)0; // Shader index
 
-    // UVs
+    // UVs — apply KHR_texture_transform (scale, offset, rotation) once here
     for (int gIdx : sortedVerts) {
       QVector2D uv = m_finalTexCoords[gIdx];
-      // Use raw UVs. The engine's rasterizer already handles wrapping.
-      float newU = mat.uvOffset.x() + uv.x() * mat.uvScale.x();
-      float newV = mat.uvOffset.y() + uv.y() * mat.uvScale.y();
+      float u = uv.x(), v = uv.y();
+      if (mat.uvRotation != 0.0f) {
+        float cosR = qCos(mat.uvRotation);
+        float sinR = qSin(mat.uvRotation);
+        // Note: V is already flipped (1-v) during load, so rotate in that space
+        float pu = u - 0.5f, pv = v - 0.5f;
+        u = cosR * pu - sinR * pv + 0.5f;
+        v = sinR * pu + cosR * pv + 0.5f;
+      }
+      float newU = mat.uvOffset.x() + u * mat.uvScale.x();
+      float newV = mat.uvOffset.y() + v * mat.uvScale.y();
       out << newU << newV;
     }
 

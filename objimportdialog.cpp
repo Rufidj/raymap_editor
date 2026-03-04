@@ -46,6 +46,12 @@ ObjImportDialog::ObjImportDialog(QWidget *parent) : QDialog(parent) {
 
   m_atlasCheck = new QCheckBox(tr("Generar Atlas de Textura (PNG)"));
 
+  m_flipVCheck = new QCheckBox(tr("Invertir V (Flip UV)"));
+  m_flipVCheck->setToolTip(
+      tr("Activa si las texturas aparecen invertidas verticalmente (para "
+         "modelos no exportados desde Blender)"));
+  m_flipVCheck->setChecked(false); // Default: OFF for Blender models
+
   m_atlasSizeSpin = new QSpinBox();
   m_atlasSizeSpin->setRange(64, 4096);
   m_atlasSizeSpin->setValue(1024);
@@ -57,6 +63,7 @@ ObjImportDialog::ObjImportDialog(QWidget *parent) : QDialog(parent) {
   optionsLayout->addWidget(new QLabel(tr("Tam. Atlas:")));
   optionsLayout->addWidget(m_atlasSizeSpin);
   optionsLayout->addStretch();
+  optionsLayout->addWidget(m_flipVCheck);
   optionsLayout->addWidget(m_atlasCheck);
   mainLayout->addLayout(optionsLayout);
 
@@ -385,6 +392,13 @@ void ObjImportDialog::convert() {
     }
   }
 
+  // Apply V-flip to all UVs if requested (for non-Blender exporters)
+  if (m_flipVCheck->isChecked()) {
+    auto &uvs = const_cast<QVector<QVector2D> &>(converter.texCoords());
+    for (auto &uv : uvs)
+      uv.setY(1.0f - uv.y());
+  }
+
   converter.setProgress(90, "Guardando MD3...");
   if (!converter.saveMd3(outPath, m_scaleSpin->value(), m_rotationSpin->value(),
                          m_orientXSpin->value(), m_orientYSpin->value(),
@@ -414,6 +428,7 @@ bool ObjImportDialog::generateAtlas() const {
   return m_atlasCheck->isChecked();
 }
 int ObjImportDialog::rotation() const { return m_rotationSpin->value(); }
+bool ObjImportDialog::flipV() const { return m_flipVCheck->isChecked(); }
 
 void ObjImportDialog::onRotationChanged(int degrees) {
   // Update visual arrow based on rotation

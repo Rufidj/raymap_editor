@@ -59,8 +59,8 @@ bool RayMapFormat::loadMap(
   }
 
   /* Verify version */
-  if (version < 8 || version > 31) {
-    qWarning() << "Versión no soportada:" << version << "(solo v8-v31)";
+  if (version < 8 || version > 99) {
+    qWarning() << "Versión no soportada:" << version << "(solo v8-v99)";
     file.close();
     return false;
   }
@@ -541,6 +541,22 @@ bool RayMapFormat::loadMap(
             sizeof(int32_t));
       }
 
+      // Animation fields (v32)
+      if (version >= 32 && !in.atEnd()) {
+        int32_t sG = 0, eG = 0;
+        float aS = 0.0f;
+        in.readRawData(reinterpret_cast<char *>(&sG), sizeof(int32_t));
+        in.readRawData(reinterpret_cast<char *>(&eG), sizeof(int32_t));
+        in.readRawData(reinterpret_cast<char *>(&aS), sizeof(float));
+        entity.startGraph = sG;
+        entity.endGraph = eG;
+        entity.animSpeed = aS;
+      } else {
+        entity.startGraph = 0;
+        entity.endGraph = 0;
+        entity.animSpeed = 0.0f;
+      }
+
       // Generate processName from asset path if not set
       // (for backward compatibility with old maps or if explicit name missing)
       // Note: We always regenerate for now to ensure consistency with filename
@@ -728,10 +744,12 @@ bool RayMapFormat::saveMap(
   }
   // --------------------------------------------
 
-  const uint32_t version = 31; /* v31: Behavior Nodes with Multi-Link Output */
-                               // v29: Physics Engine
-                               // v24: Normals, v25: Lights, v26: Fluid Params,
-                               // v27: Liquid Speed, v28: Fog
+  const uint32_t version =
+      32; /* v32: Animation fields (startGraph, endGraph, animSpeed) */
+          // v31: Behavior Nodes with Multi-Link Output
+          // v29: Physics Engine
+          // v24: Normals, v25: Lights, v26: Fluid Params,
+          // v27: Liquid Speed, v28: Fog
   uint32_t num_sectors = mapData.sectors.size();
   uint32_t num_portals = mapData.portals.size();
   uint32_t num_sprites = mapData.sprites.size();
@@ -1168,6 +1186,17 @@ bool RayMapFormat::saveMap(
           reinterpret_cast<const char *>(&entity.behaviorGraph.nextPinId),
           sizeof(int32_t));
     }
+
+    // Animation fields (v32)
+    int32_t startGraphVal = entity.startGraph;
+    int32_t endGraphVal = entity.endGraph;
+    float animSpeedVal = entity.animSpeed;
+    out.writeRawData(reinterpret_cast<const char *>(&startGraphVal),
+                     sizeof(int32_t));
+    out.writeRawData(reinterpret_cast<const char *>(&endGraphVal),
+                     sizeof(int32_t));
+    out.writeRawData(reinterpret_cast<const char *>(&animSpeedVal),
+                     sizeof(float));
   }
 
   // ===== NPC PATHS (v13) =====

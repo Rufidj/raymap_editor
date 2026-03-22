@@ -18,6 +18,11 @@
 #include <QTextStream>
 #include <QVBoxLayout>
 #include <QtGlobal>
+#include <QMessageBox>
+#include <QJsonDocument>
+#include <QPushButton>
+
+#include <QWheelEvent>
 
 /* ============================================================================
    PIN ITEM
@@ -232,6 +237,8 @@ BehaviorLinkItem::BehaviorLinkItem(BehaviorPinItem *start, BehaviorPinItem *end)
     : m_start(start), m_end(end) {
   setPen(QPen(m_start->data()->isExecution ? Qt::white : Qt::cyan, 2));
   setZValue(-1);
+  // Make cables easier to click
+  setFlag(QGraphicsItem::ItemIsSelectable, true);
   updatePath();
 }
 
@@ -282,12 +289,13 @@ void BehaviorNodeScene::refreshDataPointers() {
 void BehaviorNodeScene::deleteNode(BehaviorNodeItem *item) {
   if (!item)
     return;
-  NodeData *data = item->data();
 
-  // 1. Remove links
-  for (const NodePinData &p : data->pins) {
-    removePinLinks(p.pinId);
-  }
+  // 1. CRITICAL: Clear all visual links FIRST. 
+  // Links hold pointers to pins. If we delete the node/pins first, links become dangling.
+  qDeleteAll(m_linkItems);
+  m_linkItems.clear();
+
+  NodeData *data = item->data();
 
   // 2. Remove from graph data
   for (int i = 0; i < m_graph.nodes.size(); ++i) {
@@ -297,11 +305,15 @@ void BehaviorNodeScene::deleteNode(BehaviorNodeItem *item) {
     }
   }
 
-  // 3. Remove from items list and scene
+  // 3. Remove visual node item
   m_nodeItems.removeAll(item);
   removeItem(item);
-  delete item;
+  delete item; // Pins are deleted here too (as children)
 
+  // 4. CRITICAL: Re-sync all remaining visual nodes with the shifted QVector
+  refreshDataPointers();
+
+  // 5. Rebuild links for remaining nodes
   updateLinks();
 }
 
@@ -341,6 +353,27 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     pType.value = "TYPE_PLAYER";
     data.pins.append(pOut);
     data.pins.append(pType);
+  } else if (type == "event_death") {
+    NodePinData p;
+    p.pinId = m_graph.nextPinId++;
+    p.name = "Out";
+    p.isInput = false;
+    p.isExecution = true;
+    data.pins.append(p);
+  } else if (type == "event_damage") {
+    NodePinData p;
+    p.pinId = m_graph.nextPinId++;
+    p.name = "Out";
+    p.isInput = false;
+    p.isExecution = true;
+    data.pins.append(p);
+  } else if (type == "event_player_death") {
+    NodePinData p;
+    p.pinId = m_graph.nextPinId++;
+    p.name = "Out";
+    p.isInput = false;
+    p.isExecution = true;
+    data.pins.append(p);
   } else if (type == "logic_if") {
     NodePinData pIn, pTrue, pFalse, pCond;
     pIn.pinId = m_graph.nextPinId++;
@@ -526,6 +559,12 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     pScale.isInput = true;
     pScale.isExecution = false;
     pScale.value = "8.0";
+    NodePinData pRepeat;
+    pRepeat.pinId = m_graph.nextPinId++;
+    pRepeat.name = "Loop (1/0)";
+    pRepeat.isInput = true;
+    pRepeat.isExecution = false;
+    pRepeat.value = "0";
     data.pins.append(pIn);
     data.pins.append(pOut);
     data.pins.append(pFile);
@@ -533,6 +572,102 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     data.pins.append(pGraphEnd);
     data.pins.append(pSpeed);
     data.pins.append(pScale);
+    data.pins.append(pRepeat);
+  } else if (type == "action_damage") {
+    NodePinData pIn, pOut, pVal;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pVal.pinId = m_graph.nextPinId++;
+    pVal.name = "Damage";
+    pVal.isInput = true;
+    pVal.isExecution = false;
+    pVal.value = "25";
+    NodePinData pTarget;
+    pTarget.pinId = m_graph.nextPinId++;
+    pTarget.name = "Target";
+    pTarget.isInput = true;
+    pTarget.isExecution = false;
+    pTarget.value = "TYPE_PLAYER";
+    NodePinData pHitFrame;
+    pHitFrame.pinId = m_graph.nextPinId++;
+    pHitFrame.name = "Hit Frame";
+    pHitFrame.isInput = true;
+    pHitFrame.isExecution = false;
+    pHitFrame.value = "0"; // 0 = last frame of attack anim (current_anim_end)
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pVal);
+    data.pins.append(pTarget);
+    data.pins.append(pHitFrame);
+  } else if (type == "logic_key") {
+    NodePinData pKey, pOut;
+    pKey.pinId = m_graph.nextPinId++;
+    pKey.name = "Key";
+    pKey.isInput = true;
+    pKey.isExecution = false;
+    pKey.value = "SPACE";
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Pressed";
+    pOut.isInput = false;
+    pOut.isExecution = false;
+    data.pins.append(pKey);
+    data.pins.append(pOut);
+  } else if (type == "action_die") {
+    NodePinData pIn, pStart, pEnd, pBillboard;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pStart.pinId = m_graph.nextPinId++;
+    pStart.name = "Start Frame";
+    pStart.isInput = true;
+    pStart.isExecution = false;
+    pStart.value = "30";
+    pEnd.pinId = m_graph.nextPinId++;
+    pEnd.name = "End Frame";
+    pEnd.isInput = true;
+    pEnd.isExecution = false;
+    pEnd.value = "45";
+    pBillboard.pinId = m_graph.nextPinId++;
+    pBillboard.name = "Billboard Type";
+    pBillboard.isInput = true;
+    pBillboard.isExecution = false;
+    pBillboard.value = "2";
+    data.pins.append(pIn);
+    data.pins.append(pStart);
+    data.pins.append(pEnd);
+    data.pins.append(pBillboard);
+  } else if (type == "action_set_health") {
+    NodePinData pIn, pOut, pVal;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pVal.pinId = m_graph.nextPinId++;
+    pVal.name = "Health";
+    pVal.isInput = true;
+    pVal.isExecution = false;
+    pVal.value = "100";
+    NodePinData pTarget;
+    pTarget.pinId = m_graph.nextPinId++;
+    pTarget.name = "Target";
+    pTarget.isInput = true;
+    pTarget.isExecution = false;
+    pTarget.value = "Self";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pVal);
+    data.pins.append(pTarget);
   } else if (type == "action_setvar") {
     NodePinData pIn, pOut, pVar, pVal;
     pIn.pinId = m_graph.nextPinId++;
@@ -1000,6 +1135,43 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     data.pins.append(pOut);
     data.pins.append(pTargetId);
     data.pins.append(pSpeed);
+  } else if (type == "action_npc_attack") {
+    NodePinData pIn, pOut, pRange, pDamage, pCooldown, pAnimStart, pAnimEnd;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "Ejecutar";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Siguiente";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    pRange.pinId = m_graph.nextPinId++;
+    pRange.name = "Rango Ataque";
+    pRange.isInput = true;
+    pRange.value = "80";
+    pDamage.pinId = m_graph.nextPinId++;
+    pDamage.name = "Daño";
+    pDamage.isInput = true;
+    pDamage.value = "25";
+    pCooldown.pinId = m_graph.nextPinId++;
+    pCooldown.name = "Cooldown (seg)";
+    pCooldown.isInput = true;
+    pCooldown.value = "1.0";
+    pAnimStart.pinId = m_graph.nextPinId++;
+    pAnimStart.name = "Frame Inicio Ataque";
+    pAnimStart.isInput = true;
+    pAnimStart.value = "15";
+    pAnimEnd.pinId = m_graph.nextPinId++;
+    pAnimEnd.name = "Frame Fin Ataque";
+    pAnimEnd.isInput = true;
+    pAnimEnd.value = "30";
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pRange);
+    data.pins.append(pDamage);
+    data.pins.append(pCooldown);
+    data.pins.append(pAnimStart);
+    data.pins.append(pAnimEnd);
   } else if (type == "action_set_alpha") {
     NodePinData pIn, pOut, pAlpha;
     pIn.pinId = m_graph.nextPinId++;
@@ -1066,9 +1238,11 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
 }
 
 void BehaviorNodeScene::updateLinks() {
-  // Clear old links
-  for (auto link : m_linkItems)
+  // Clear old links and DELETE them to prevent dangling pointers and leaks
+  for (auto link : m_linkItems) {
     removeItem(link);
+    delete link;
+  }
   m_linkItems.clear();
 
   // Find all connected pins
@@ -1175,10 +1349,17 @@ void BehaviorNodeScene::mouseReleaseEvent(QGraphicsSceneMouseEvent *event) {
 void BehaviorNodeScene::keyPressEvent(QKeyEvent *event) {
   if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
     QList<QGraphicsItem *> selected = selectedItems();
+    QList<BehaviorNodeItem *> toDelete;
     for (QGraphicsItem *item : selected) {
       if (item->type() == BehaviorNodeItem::Type) {
-        deleteNode(static_cast<BehaviorNodeItem *>(item));
+        toDelete.append(static_cast<BehaviorNodeItem *>(item));
       }
+    }
+    
+    // Process deletions one by one
+    // deleteNode now handles updateLinks and refreshDataPointers internally for safety
+    for (BehaviorNodeItem *node : toDelete) {
+      deleteNode(node);
     }
   }
   QGraphicsScene::keyPressEvent(event);
@@ -1206,6 +1387,15 @@ void BehaviorNodeScene::contextMenuEvent(
   });
   events->addAction("Al Actualizar", [this, event]() {
     addNode("event_update", event->scenePos());
+  });
+  events->addAction("Al Morir", [this, event]() {
+    addNode("event_death", event->scenePos());
+  });
+  events->addAction("Al Morir el Jugador", [this, event]() {
+    addNode("event_player_death", event->scenePos());
+  });
+  events->addAction("Al Recibir Daño", [this, event]() {
+    addNode("event_damage", event->scenePos());
   });
 
   QMenu *actions = menu.addMenu("Acciones");
@@ -1242,6 +1432,17 @@ void BehaviorNodeScene::contextMenuEvent(
   actions->addAction("Asignar Variable", [this, event]() {
     addNode("action_setvar", event->scenePos());
   });
+  actions->addSeparator();
+  actions->addAction("Hacer Daño", [this, event]() {
+    addNode("action_damage", event->scenePos());
+  });
+  actions->addAction("Morir (Die)", [this, event]() {
+    addNode("action_die", event->scenePos());
+  });
+  actions->addAction("Set Vida (HP)", [this, event]() {
+    addNode("action_set_health", event->scenePos());
+  });
+  actions->addSeparator();
   actions->addAction("Cambiar Texto UI", [this, event]() {
     addNode("action_set_ui_text", event->scenePos());
   });
@@ -1275,6 +1476,9 @@ void BehaviorNodeScene::contextMenuEvent(
   });
   actions->addAction("Huir de Objetivo (NPC)", [this, event]() {
     addNode("action_npc_flee", event->scenePos());
+  });
+  actions->addAction("Atacar Objetivo (NPC)", [this, event]() {
+    addNode("action_npc_attack", event->scenePos());
   });
 
   QMenu *logic = menu.addMenu("Lógica");
@@ -1314,11 +1518,37 @@ void BehaviorNodeScene::contextMenuEvent(
   logic->addAction("Ángulo a Cámara", [this, event]() {
     addNode("math_camera_angle", event->scenePos());
   });
+  logic->addAction("Tecla Pulsada (Key)", [this, event]() {
+    addNode("logic_key", event->scenePos());
+  });
+  logic->addAction("Variable: Colisionando? (colliding)", [this, event]() {
+    addNode("logic_compare", event->scenePos());
+    // Note: I could create a specific node, but logic_compare with "colliding"
+    // as A is fine.
+  });
 
   menu.addSeparator();
 
   QGraphicsItem *item = itemAt(event->scenePos(), QTransform());
-  if (item && (item->type() == BehaviorNodeItem::Type ||
+
+  // Right-click on a CABLE → offer to delete it
+  if (item && item->type() == BehaviorLinkItem::Type) {
+    BehaviorLinkItem *linkItem = static_cast<BehaviorLinkItem *>(item);
+    menu.addAction("❌ Eliminar Cable", [this, linkItem]() {
+      // Remove the connection from graph data (both directions)
+      int startPinId = linkItem->startPin()->data()->pinId;
+      int endPinId   = linkItem->endPin()->data()->pinId;
+      for (NodeData &node : m_graph.nodes) {
+        for (NodePinData &pin : node.pins) {
+          pin.linkedPinIds.removeOne(endPinId);
+          pin.linkedPinIds.removeOne(startPinId);
+        }
+      }
+      updateLinks(); // Rebuild visuals
+    });
+  }
+  // Right-click on a NODE → offer to delete it
+  else if (item && (item->type() == BehaviorNodeItem::Type ||
                item->parentItem() &&
                    item->parentItem()->type() == BehaviorNodeItem::Type)) {
     BehaviorNodeItem *nodeItem =
@@ -1326,11 +1556,37 @@ void BehaviorNodeScene::contextMenuEvent(
             ? static_cast<BehaviorNodeItem *>(item)
             : static_cast<BehaviorNodeItem *>(item->parentItem());
 
-    menu.addAction("Eliminar Nodo",
-                   [this, nodeItem]() { deleteNode(nodeItem); });
+    menu.addAction("🗑 Eliminar Nodo",
+                   [this, nodeItem]() {
+                     deleteNode(nodeItem);
+                     updateLinks();
+                   });
   }
 
   menu.exec(event->screenPos());
+}
+
+/* ============================================================================
+   BEHAVIOR NODE VIEW (For Zooming)
+   ============================================================================
+ */
+BehaviorNodeView::BehaviorNodeView(QWidget *parent) : QGraphicsView(parent) {
+  setRenderHint(QPainter::Antialiasing);
+  setDragMode(QGraphicsView::ScrollHandDrag);
+  setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+}
+
+void BehaviorNodeView::wheelEvent(QWheelEvent *event) {
+  if (event->modifiers() & Qt::ControlModifier) {
+    const double scaleFactor = 1.15;
+    if (event->angleDelta().y() > 0) {
+      scale(scaleFactor, scaleFactor);
+    } else {
+      scale(1.0 / scaleFactor, 1.0 / scaleFactor);
+    }
+  } else {
+    QGraphicsView::wheelEvent(event);
+  }
 }
 
 /* ============================================================================
@@ -1341,21 +1597,141 @@ BehaviorNodeEditor::BehaviorNodeEditor(BehaviorGraph &graph,
                                        const QString &projectPath,
                                        QWidget *parent)
     : QDialog(parent), m_graph(graph), m_projectPath(projectPath) {
+  setWindowFlags(Qt::Window | Qt::WindowMinMaxButtonsHint |
+                 Qt::WindowCloseButtonHint);
   setWindowTitle(tr("Editor de Nodos de Comportamiento"));
   resize(1000, 700);
 
   QVBoxLayout *layout = new QVBoxLayout(this);
-  m_view = new QGraphicsView(this);
+  m_view = new BehaviorNodeView(this);
   m_scene = new BehaviorNodeScene(m_graph, m_projectPath, this);
+  m_scene->setSceneRect(-5000, -5000, 10000, 10000); // Massive space for nodes
   m_view->setScene(m_scene);
-  m_view->setRenderHint(QPainter::Antialiasing);
-  m_view->setDragMode(QGraphicsView::ScrollHandDrag);
+  m_view->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  m_view->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
   layout->addWidget(m_view);
 
   QDialogButtonBox *buttonBox = new QDialogButtonBox(
       QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+
+  QPushButton *saveBtn = buttonBox->addButton("Guardar Grafo", QDialogButtonBox::ActionRole);
+  QPushButton *loadBtn = buttonBox->addButton("Cargar Grafo", QDialogButtonBox::ActionRole);
+  connect(saveBtn, &QPushButton::clicked, this, &BehaviorNodeEditor::onSaveGraph);
+  connect(loadBtn, &QPushButton::clicked, this, &BehaviorNodeEditor::onLoadGraph);
+
   connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
   connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
   layout->addWidget(buttonBox);
+}
+
+void BehaviorNodeEditor::onSaveGraph() {
+  QString file = QFileDialog::getSaveFileName(this, "Guardar Grafo", m_projectPath, "Grapho Files (*.grapho *.json)");
+  if (file.isEmpty()) return;
+  
+  if (!file.endsWith(".grapho") && !file.endsWith(".json")) {
+      file += ".grapho";
+  }
+
+  QJsonObject obj = serializeGraph();
+  QJsonDocument doc(obj);
+  QFile f(file);
+  if (f.open(QIODevice::WriteOnly)) {
+    f.write(doc.toJson());
+    f.close();
+    QMessageBox::information(this, "Guardado", "Grafo guardado exitosamente.");
+  } else {
+    QMessageBox::warning(this, "Error", "No se pudo guardar el archivo.");
+  }
+}
+
+void BehaviorNodeEditor::onLoadGraph() {
+  QString file = QFileDialog::getOpenFileName(this, "Cargar Grafo", m_projectPath, "Grapho Files (*.grapho *.json)");
+  if (file.isEmpty()) return;
+  QFile f(file);
+  if (f.open(QIODevice::ReadOnly)) {
+    QByteArray data = f.readAll();
+    f.close();
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (!doc.isNull() && doc.isObject()) {
+      deserializeGraph(doc.object());
+      QMessageBox::information(this, "Cargado", "Grafo cargado exitosamente.");
+    } else {
+      QMessageBox::warning(this, "Error", "El archivo de grafo no es válido o está corrupto.");
+    }
+  } else {
+    QMessageBox::warning(this, "Error", "No se pudo leer el archivo.");
+  }
+}
+
+QJsonObject BehaviorNodeEditor::serializeGraph() const {
+  QJsonObject graphObj;
+  graphObj["nextNodeId"] = m_graph.nextNodeId;
+  graphObj["nextPinId"] = m_graph.nextPinId;
+  QJsonArray nodesArr;
+  for (const auto &node : m_graph.nodes) {
+    QJsonObject nodeObj;
+    nodeObj["nodeId"] = node.nodeId;
+    nodeObj["type"] = node.type;
+    nodeObj["x"] = (double)node.x;
+    nodeObj["y"] = (double)node.y;
+    QJsonArray pinsArr;
+    for (const auto &pin : node.pins) {
+      QJsonObject pinObj;
+      pinObj["pinId"] = pin.pinId;
+      pinObj["name"] = pin.name;
+      pinObj["isInput"] = pin.isInput;
+      pinObj["isExecution"] = pin.isExecution;
+      pinObj["value"] = pin.value;
+      QJsonArray linksArr;
+      for (int lid : pin.linkedPinIds)
+        linksArr.append(lid);
+      pinObj["links"] = linksArr;
+      pinsArr.append(pinObj);
+    }
+    nodeObj["pins"] = pinsArr;
+    nodesArr.append(nodeObj);
+  }
+  graphObj["nodes"] = nodesArr;
+  return graphObj;
+}
+
+void BehaviorNodeEditor::deserializeGraph(const QJsonObject &graphObj) {
+  BehaviorGraph newGraph;
+  newGraph.nextNodeId = graphObj["nextNodeId"].toInt(1);
+  newGraph.nextPinId = graphObj["nextPinId"].toInt(1);
+  QJsonArray nodesArr = graphObj["nodes"].toArray();
+  for (const QJsonValue &nodeVal : nodesArr) {
+    QJsonObject nodeObj = nodeVal.toObject();
+    NodeData node;
+    node.nodeId = nodeObj["nodeId"].toInt();
+    node.type = nodeObj["type"].toString();
+    node.x = nodeObj["x"].toDouble();
+    node.y = nodeObj["y"].toDouble();
+    QJsonArray pinsArr = nodeObj["pins"].toArray();
+    for (const QJsonValue &pinVal : pinsArr) {
+      QJsonObject pinObj = pinVal.toObject();
+      NodePinData pin;
+      pin.pinId = pinObj["pinId"].toInt();
+      pin.name = pinObj["name"].toString();
+      pin.isInput = pinObj["isInput"].toBool();
+      pin.isExecution = pinObj["isExecution"].toBool();
+      pin.value = pinObj["value"].toString();
+      QJsonArray linksArr = pinObj["links"].toArray();
+      for (const QJsonValue &linkVal : linksArr) {
+        pin.linkedPinIds.append(linkVal.toInt());
+      }
+      node.pins.append(pin);
+    }
+    newGraph.nodes.append(node);
+  }
+  m_graph = newGraph;
+  
+  if (m_view && m_scene) {
+    m_view->setScene(nullptr);
+    m_scene->deleteLater();
+    m_scene = new BehaviorNodeScene(m_graph, m_projectPath, this);
+    m_scene->setSceneRect(-5000, -5000, 10000, 10000);
+    m_view->setScene(m_scene);
+  }
 }

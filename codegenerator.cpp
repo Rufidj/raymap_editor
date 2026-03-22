@@ -149,6 +149,26 @@ QString CodeGenerator::getMainTemplate() {
       "    // [[USER_CONSTANTS_END]]\n"
       "END\n"
       "\n"
+      "      "// ---------------------------------------------------------\n"
+      "// VARIABLES GLOBALES\n"
+      "// ---------------------------------------------------------\n"
+      "GLOBAL\n"
+      "    // [[ED_GLOBAL_START]]\n"
+      "    int screen_w;\n"
+      "    int screen_h;\n"
+      "    int move_speed;\n"
+      "    int rot_speed;\n"
+      "    float cam_shake_intensity = 0.0;\n"
+      "    int cam_shake_timer = 0;\n"
+      "    double g_player_x, g_player_y, g_player_z;\n"
+      "    double g_delta_time;   // seconds since last frame\n"
+      "    int    g_last_frame_ms; // last get_timer() value\n"
+      "    // [[ED_GLOBAL_END]]\n"
+      "\n"
+      "    // [[USER_GLOBAL_START]]\n"
+      "    // [[USER_GLOBAL_END]]\n"
+      "END\n"
+      "\n"
       "// ---------------------------------------------------------\n"
       "// DECLARACIONES Y PROCESOS DEL EDITOR\n"
       "// ---------------------------------------------------------\n"
@@ -167,23 +187,6 @@ QString CodeGenerator::getMainTemplate() {
       "// [[ED_RESOURCES_START]]\n"
       "{{INLINE_RESOURCES}}\n"
       "// [[ED_RESOURCES_END]]\n"
-      "\n"
-      "// ---------------------------------------------------------\n"
-      "// VARIABLES GLOBALES\n"
-      "// ---------------------------------------------------------\n"
-      "GLOBAL\n"
-      "    // [[ED_GLOBAL_START]]\n"
-      "    int screen_w;\n"
-      "    int screen_h;\n"
-      "    int move_speed;\n"
-      "    int rot_speed;\n"
-      "    float cam_shake_intensity = 0.0;\n"
-      "    int cam_shake_timer = 0;\n"
-      "    // [[ED_GLOBAL_END]]\n"
-      "\n"
-      "    // [[USER_GLOBAL_START]]\n"
-      "    // [[USER_GLOBAL_END]]\n"
-      "END\n"
       "\n"
       "// --------------------------------─------------------------\n"
       "// PROGRAMA PRINCIPAL\n"
@@ -625,7 +628,52 @@ bool CodeGenerator::loadSceneJson(const QString &path, SceneData &data) {
 QString CodeGenerator::generateUserLogicStubs(const QStringList &processNames) {
   QString code =
       "// USER LOGIC - Edit this file to add custom behaviors\n"
-      "// These hooks are called by the auto-generated processes\n\n";
+      "// These hooks are called by the auto-generated processes\n\n"
+      "// =====================================================\n"
+      "// FX: Visual hit/death effect using humo.fpg particles\n"
+      "// =====================================================\n"
+      "GLOBAL\n"
+      "    int g_fpg_humo;   // Cached FPG handle for hit particles\n"
+      "    int g_fpg_fuego;  // FPG para el fuego del coche (¡crea fuego.fpg en assets!)\n"
+      "END\n\n"
+      "FUNCTION fx_hit(double ex, double ey, double ez)\n"
+      "BEGIN\n"
+      "    IF (g_fpg_humo <= 0)\n"
+      "        g_fpg_humo = fpg_load(get_asset_path(\"assets/fpg/humo.fpg\"));\n"
+      "    END\n"
+      "    IF (g_fpg_humo > 0)\n"
+      "        // Spawn animated billboard effect (frames 1-4, speed 0.05, scale 0.5, repeat=0)\n"
+      "        Billboard_Effect_Process(ex, ey, ez, g_fpg_humo, 1, 4, 0.05, 0.5, 0);\n"
+      "    END\n"
+      "END\n\n"
+      "PROCESS fx_persistent_fire(double ex, double ey, double ez)\n"
+      "PRIVATE\n"
+      "    int graph_iter;\n"
+      "    double scale;\n"
+      "    int spr_id;\n"
+      "BEGIN\n"
+      "    scale = 0.8;\n"
+      "    z = ez - (scale / 4.0);\n"
+      "    // Add sprite using fuego.fpg (asume que los frames van del 1 al 4, cambialo si tiene mas)\n"
+      "    spr_id = RAY_ADD_SPRITE(ex, ey, z, g_fpg_fuego, 1, 64 * scale, 64 * scale, 1);\n"
+      "    LOOP\n"
+      "        graph_iter = graph_iter + 1;\n"
+      "        if (graph_iter > 3) graph_iter = 0; end\n"
+      "        RAY_SET_SPRITE_GRAPH(spr_id, 1 + graph_iter);\n"
+      "        FRAME;\n"
+      "    END\n"
+      "ONEXIT:\n"
+      "    RAY_REMOVE_SPRITE(spr_id);\n"
+      "END\n\n"
+      "FUNCTION fx_fire(double ex, double ey, double ez)\n"
+      "BEGIN\n"
+      "    IF (g_fpg_fuego <= 0)\n"
+      "        g_fpg_fuego = fpg_load(get_asset_path(\"assets/fpg/fuego.fpg\"));\n"
+      "    END\n"
+      "    IF (g_fpg_fuego > 0)\n"
+      "        fx_persistent_fire(ex, ey, ez);\n"
+      "    END\n"
+      "END\n\n";
 
   for (const QString &name : processNames) {
     QString lowerName = name.toLower();
@@ -654,6 +702,9 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   code += "    int fpg_map;\n";
   code += "    int spawn_ent_id;\n";
   code += "    int player_id;\n";
+
+  QString wrapperOpen = getWrapperOpen();
+  QString wrapperClose = getWrapperClose();
   if (data.timeout > 0 && !data.nextScene.isEmpty()) {
     code += "    int scene_timer;\n";
   }
@@ -710,38 +761,32 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
   for (const auto &ent : data.entities) {
     if (!ent->sourceFile.isEmpty() &&
         !loadedResources.contains(ent->sourceFile)) {
-      QString cleanName = QFileInfo(ent->sourceFile).baseName().toLower();
-      cleanName = cleanName.replace(".", "_").replace(" ", "_");
-      QString ext = QFileInfo(ent->sourceFile).suffix().toLower();
-      QString varName = "id_" + cleanName + "_" + ext;
+      QString varName = resourceToVarName(ent->sourceFile);
       resMap[ent->sourceFile] = varName;
       loadedResources.insert(ent->sourceFile);
     }
     if (!ent->fontFile.isEmpty() && !loadedResources.contains(ent->fontFile)) {
-      QString cleanName = QFileInfo(ent->fontFile).baseName().toLower();
-      cleanName = cleanName.replace(".", "_").replace(" ", "_");
-      QString ext = QFileInfo(ent->fontFile).suffix().toLower();
-      QString varName = "id_" + cleanName + "_" + ext;
+      QString varName = resourceToVarName(ent->fontFile);
       resMap[ent->fontFile] = varName;
       loadedResources.insert(ent->fontFile);
     }
   }
   if (!data.musicFile.isEmpty() && !loadedResources.contains(data.musicFile)) {
-    QString cleanName = QFileInfo(data.musicFile).baseName().toLower();
-    cleanName = cleanName.replace(".", "_").replace(" ", "_");
-    QString ext = QFileInfo(data.musicFile).suffix().toLower();
-    QString varName = "id_" + cleanName + "_" + ext;
+    QString varName = resourceToVarName(data.musicFile);
     resMap[data.musicFile] = varName;
     loadedResources.insert(data.musicFile);
   }
   if (!data.cursorFile.isEmpty() &&
       !loadedResources.contains(data.cursorFile)) {
-    QString cleanName = QFileInfo(data.cursorFile).baseName().toLower();
-    cleanName = cleanName.replace(".", "_").replace(" ", "_");
-    QString ext = QFileInfo(data.cursorFile).suffix().toLower();
-    QString varName = "id_" + cleanName + "_" + ext;
+    QString varName = resourceToVarName(data.cursorFile);
     resMap[data.cursorFile] = varName;
     loadedResources.insert(data.cursorFile);
+  }
+  if (!data.backgroundFile.isEmpty() &&
+      !loadedResources.contains(data.backgroundFile)) {
+    QString varName = resourceToVarName(data.backgroundFile);
+    resMap[data.backgroundFile] = varName;
+    loadedResources.insert(data.backgroundFile);
   }
 
   // Set Cursor (using global resource variable)
@@ -988,14 +1033,20 @@ QString CodeGenerator::generateScenePrg(const QString &sceneName,
 
       // Auto-load FPG textures (Assumed to be in assets/fpg/ with same name)
       QString fpgPath = "assets/fpg/" + QFileInfo(mapPath).baseName() + ".fpg";
-      code += QString("    fpg_map = fpg_load(\"%1\");\n").arg(fpgPath);
-      code +=
-          "    if (fpg_map == 0) say(\"Warning: FPG texture file not found: " +
-          fpgPath + "\"); end\n";
+      code += QString("    fpg_map = fpg_load(%1\"%2\"%3);\n")
+                  .arg(wrapperOpen)
+                  .arg(fpgPath)
+                  .arg(wrapperClose);
+      code += "    if (fpg_map == 0) say(\"Warning: FPG texture file not "
+              "found: \" + " +
+              wrapperOpen + "\"" + fpgPath + "\"" + wrapperClose + "); end\n";
 
-      code += QString("    if (RAY_LOAD_MAP(\"%1\", fpg_map) == 0) say(\"Error "
-                      "loading hybrid 3D Map\"); end\n")
-                  .arg(mapPath);
+      code +=
+          QString("    if (RAY_LOAD_MAP(%1\"%2\"%3, fpg_map) == 0) say(\"Error "
+                  "loading hybrid 3D Map\"); end\n")
+              .arg(wrapperOpen)
+              .arg(mapPath)
+              .arg(wrapperClose);
 
       // --- Auto-Spawn Entities from Map ---
       MapData internalData;
@@ -1254,13 +1305,8 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
     m_inlineCommons += "        RETURN \"/data/data/\" + \"" + pkgName +
                        "\" + \"/files/\" + relative_path;\n";
     m_inlineCommons += "    ELSE\n";
-    m_inlineCommons += "        // Robust Desktop Path Check (src/ vs root)\n";
-    m_inlineCommons += "        IF (!fexists(relative_path) && fexists(\"../\" "
-                       "+ relative_path))\n";
-    m_inlineCommons += "            RETURN \"../\" + relative_path;\n";
-    m_inlineCommons += "        END\n";
+    m_inlineCommons += "        RETURN relative_path;\n";
     m_inlineCommons += "    END\n";
-    m_inlineCommons += "    RETURN relative_path;\n";
     m_inlineCommons += "END\n\n";
 
     m_inlineCommons +=
@@ -1354,22 +1400,31 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
     m_inlineCommons += "END\n\n";
     m_inlineCommons += "PROCESS Billboard_Effect_Process(float px, float py, "
                        "float pz, int file, "
-                       "int g_start, int g_end, float speed, float scale)\n";
-    m_inlineCommons +=
-        "PRIVATE\n    int spr_id;\n    int cur_g;\n    float timer;\n";
-    m_inlineCommons += "BEGIN\n    timer = 0;\n";
-    m_inlineCommons += "    cur_g = g_start;\n";
-    m_inlineCommons +=
-        "    spr_id = RAY_ADD_SPRITE(px, py, pz, file, cur_g, 0, 0, 0);\n";
-    m_inlineCommons += "    RAY_SET_SPRITE_SCALE(spr_id, scale);\n";
-    m_inlineCommons += "    WHILE (cur_g <= g_end)\n";
-    m_inlineCommons += "        RAY_SET_SPRITE_GRAPH(spr_id, cur_g);\n";
-    m_inlineCommons += "        timer = 0;\n";
-    m_inlineCommons +=
-        "        WHILE (timer < speed) timer += 0.016; FRAME; END\n";
-    m_inlineCommons += "        cur_g++;\n";
-    m_inlineCommons += "    END\n";
-    m_inlineCommons += "    RAY_REMOVE_SPRITE(spr_id);\n";
+                       "int g_start, int g_end, float speed, float scale, int repeat_mode)\n";
+    m_inlineCommons += "PRIVATE\n"
+                       "    int spr_id;\n"
+                       "    int cur_g;\n"
+                       "    float timer;\n"
+                       "    float time_per_frame;\n"
+                       "    int final_w, final_h;\n";
+    m_inlineCommons += "BEGIN\n"
+                       "    if (file <= 0 || speed <= 0) return; end\n"
+                       "    time_per_frame = 1.0 / speed;\n"
+                       "    timer = 0;\n"
+                       "    cur_g = g_start;\n"
+                       "    spr_id = RAY_ADD_SPRITE(px, py, pz, file, cur_g, scale * 64.0, scale * 64.0, 1);\n"
+                       "    if (spr_id < 0) return; end\n"
+                       "    WHILE (cur_g <= g_end)\n"
+                       "        if (spr_id >= 0) RAY_SET_SPRITE_GRAPH(spr_id, cur_g); end\n"
+                       "        timer = 0;\n"
+                       "        WHILE (timer < time_per_frame)\n"
+                       "            timer += g_delta_time;\n"
+                       "            FRAME;\n"
+                       "        END\n"
+                       "        cur_g++;\n"
+                       "        if (repeat_mode == 1 && cur_g > g_end) cur_g = g_start; end\n"
+                       "    END\n"
+                       "    if (spr_id >= 0) RAY_REMOVE_SPRITE(spr_id); end\n";
     m_inlineCommons += "END\n\n";
   }
 
@@ -1438,6 +1493,10 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
       if (!data.musicFile.isEmpty()) {
         data.musicFile = fix(data.musicFile);
         allProjectResources.insert(data.musicFile);
+      }
+      if (!data.backgroundFile.isEmpty()) {
+        data.backgroundFile = fix(data.backgroundFile);
+        allProjectResources.insert(data.backgroundFile);
       }
       for (auto ent : data.entities) {
         if (!ent->sourceFile.isEmpty()) {
@@ -1541,20 +1600,7 @@ void CodeGenerator::generateAllScenes(const QString &projectPath,
     m_inlineResources += "GLOBAL\n";
     QMap<QString, QString> resMap;
     for (const QString &res : allProjectResources) {
-      QString cleanName = QFileInfo(res).baseName().toLower();
-      cleanName = cleanName.replace(" ", "_")
-                      .replace("-", "_")
-                      .replace(".", "_")
-                      .replace("[", "_")
-                      .replace("]", "_")
-                      .replace("(", "_")
-                      .replace(")", "_");
-      // Ensure it starts with a letter if somehow emptied or starting with
-      // numbers
-      if (cleanName.isEmpty() || !cleanName[0].isLetter())
-        cleanName = "res_" + cleanName;
-      QString ext = QFileInfo(res).suffix().toLower();
-      QString varName = "id_" + cleanName + "_" + ext;
+      QString varName = resourceToVarName(res);
       resMap[res] = varName;
       m_inlineResources += "    int " + varName + ";\n";
     }
@@ -1848,4 +1894,50 @@ void CodeGenerator::generateInteractionMap(const SceneData &data,
   p.end();
 
   img.save(fullPath);
+}
+
+QString CodeGenerator::resourceToVarName(const QString &resource) {
+  QFileInfo info(resource);
+  QString cleanName = info.baseName().toLower();
+
+  // Replace suspicious characters
+  cleanName = cleanName.replace(" ", "_")
+                  .replace("-", "_")
+                  .replace(".", "_")
+                  .replace("[", "_")
+                  .replace("]", "_")
+                  .replace("(", "_")
+                  .replace(")", "_")
+                  .replace("/", "_")
+                  .replace("\\", "_")
+                  .replace("'", "_")
+                  .replace("!", "_")
+                  .replace("@", "_")
+                  .replace("#", "_")
+                  .replace("%", "_")
+                  .replace("^", "_")
+                  .replace("&", "_")
+                  .replace("*", "_")
+                  .replace("+", "_")
+                  .replace("=", "_");
+
+  // Collapse multiple underscores
+  while (cleanName.contains("__"))
+    cleanName.replace("__", "_");
+
+  // Truncate long names to prevent BennuGD compiler errors (max 32 chars for
+  // the base)
+  if (cleanName.length() > 32)
+    cleanName = cleanName.left(32);
+
+  // Remove trailing underscores
+  while (cleanName.endsWith("_"))
+    cleanName.chop(1);
+
+  // Ensure it starts with a letter
+  if (cleanName.isEmpty() || !cleanName[0].isLetter())
+    cleanName = "res_" + cleanName;
+
+  QString ext = info.suffix().toLower();
+  return "id_" + cleanName + "_" + ext;
 }

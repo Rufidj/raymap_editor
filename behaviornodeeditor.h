@@ -17,6 +17,8 @@
 #include <QStyleOptionGraphicsItem>
 #include <QVariant>
 #include <QVector>
+#include <QJsonObject>
+#include <QJsonArray>
 
 class BehaviorNodeItem;
 class BehaviorPinItem;
@@ -86,8 +88,12 @@ private:
  */
 class BehaviorLinkItem : public QGraphicsPathItem {
 public:
+  enum { Type = UserType + 3 };
   BehaviorLinkItem(BehaviorPinItem *start, BehaviorPinItem *end);
   void updatePath();
+  int type() const override { return Type; }
+  BehaviorPinItem *startPin() const { return m_start; }
+  BehaviorPinItem *endPin()   const { return m_end; }
 
 private:
   BehaviorPinItem *m_start;
@@ -133,6 +139,15 @@ private:
   BehaviorPinItem *pinAt(const QPointF &pos);
 };
 
+class BehaviorNodeView : public QGraphicsView {
+  Q_OBJECT
+public:
+  explicit BehaviorNodeView(QWidget *parent = nullptr);
+
+protected:
+  void wheelEvent(QWheelEvent *event) override;
+};
+
 /* ============================================================================
    NODE EDITOR DIALOG - The container
    ============================================================================
@@ -143,8 +158,15 @@ public:
   explicit BehaviorNodeEditor(BehaviorGraph &graph, const QString &projectPath,
                               QWidget *parent = nullptr);
 
+private slots:
+  void onSaveGraph();
+  void onLoadGraph();
+
 private:
-  QGraphicsView *m_view;
+  QJsonObject serializeGraph() const;
+  void deserializeGraph(const QJsonObject &obj);
+
+  BehaviorNodeView *m_view;
   BehaviorNodeScene *m_scene;
   BehaviorGraph &m_graph;
   QString m_projectPath;

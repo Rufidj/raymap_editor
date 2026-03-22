@@ -93,7 +93,6 @@ void MainWindow::onBuildProject() {
   onGenerateCode();
 
   m_buildManager->buildProject(projectPath);
-  m_buildManager->buildProject(projectPath);
 }
 
 void MainWindow::onRunProject() {
@@ -322,6 +321,9 @@ void MainWindow::onGenerateCode() {
   QDirIterator itScn(m_projectManager->getProjectPath(), scnFilters,
                      QDir::Files | QDir::NoSymLinks,
                      QDirIterator::Subdirectories);
+  
+  QSet<QString> processedHybridMaps;
+
   while (itScn.hasNext()) {
     SceneData scnData;
     if (CodeGenerator::loadSceneJson(itScn.next(), scnData)) {
@@ -343,6 +345,10 @@ void MainWindow::onGenerateCode() {
             fullMapPath = projectDir.absolutePath() + "/" + fullMapPath;
           }
 
+          fullMapPath = QFileInfo(fullMapPath).canonicalFilePath();
+          if (processedHybridMaps.contains(fullMapPath)) continue;
+          processedHybridMaps.insert(fullMapPath);
+
           if (loader.loadMap(fullMapPath, hybridMap, nullptr)) {
             for (const auto &hEnt : hybridMap.entities) {
               entities.append(hEnt);
@@ -356,6 +362,9 @@ void MainWindow::onGenerateCode() {
                 if (!uniqueProcesses.contains(pName.toLower()))
                   uniqueProcesses << pName.toLower();
               }
+            }
+            for (const auto &nPath : hybridMap.npcPaths) {
+              npcPaths.append(nPath);
             }
           }
         }
@@ -378,18 +387,23 @@ void MainWindow::onGenerateCode() {
   }
 
   // 3. Generate and save paths
-  QString npcPathsCode = ProcessGenerator::generateNPCPathsCode(npcPaths);
-  bool pathsFileExists = QFile::exists(srcDir + "/autogen_paths.prg");
-  if (!isScene || !pathsFileExists) {
-    if (npcPathsCode.isEmpty()) {
-      npcPathsCode =
-          "// No NPC paths defined\nfunction npc_paths_init()\nbegin\nend\n";
+  QVector<NPCPath> uniquePaths;
+  QSet<int> seenIds;
+  for (const auto &p : npcPaths) {
+    if (!seenIds.contains(p.path_id)) {
+        seenIds.insert(p.path_id);
+        uniquePaths.append(p);
     }
-    QFile filePaths(srcDir + "/autogen_paths.prg");
-    if (filePaths.open(QIODevice::WriteOnly | QIODevice::Text)) {
-      filePaths.write(npcPathsCode.toUtf8());
-      filePaths.close();
-    }
+  }
+  QString npcPathsCode = ProcessGenerator::generateNPCPathsCode(uniquePaths);
+  if (npcPathsCode.isEmpty()) {
+    npcPathsCode =
+        "// No NPC paths defined\nfunction npc_paths_init()\nbegin\nend\n";
+  }
+  QFile filePaths(srcDir + "/autogen_paths.prg");
+  if (filePaths.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    filePaths.write(npcPathsCode.toUtf8());
+    filePaths.close();
   }
 
   // 4. Save monolithic resources/scenes file (ALWAYS update this)
@@ -458,6 +472,42 @@ void MainWindow::onGenerateCode() {
           }
         }
       }
+
+      // Ensure fx_hit() helper is present (needed by generated entity code)
+      bool hasFxHit = content.contains("fx_hit", Qt::CaseInsensitive);
+      bool hasGetAssetPath =
+          content.contains("get_asset_path", Qt::CaseInsensitive);
+
+      if (!hasFxHit) {
+        if (!hasGetAssetPath) {
+          toAppend += "\n// Helper for asset paths (Stub for non-Android)\n"
+                      "FUNCTION string get_asset_path(string relative_path) "
+                      "BEGIN RETURN relative_path; END\n";
+        }
+
+        toAppend +=
+            "\n"
+            "// =====================================================\n"
+            "// FX: Visual hit/death effect using humo.fpg particles\n"
+            "// =====================================================\n"
+            "GLOBAL\n"
+            "    int g_fpg_humo; // Cached FPG handle for hit particles\n"
+            "END\n\n"
+            "FUNCTION fx_hit(double ex, double ey, double ez)\n"
+            "BEGIN\n"
+            "    IF (g_fpg_humo <= 0)\n"
+            "        g_fpg_humo = "
+            "fpg_load(get_asset_path(\"assets/fpg/humo.fpg\"));\n"
+            "    END\n"
+            "    IF (g_fpg_humo > 0)\n"
+            "        // Spawn animated billboard effect (frames 1-4, speed "
+            "0.05, scale 0.5)\n"
+            "        Billboard_Effect_Process(ex, ey, ez, g_fpg_humo, 1, 4, "
+            "0.05, 0.5);\n"
+            "    END\n"
+            "END\n";
+      }
+
       if (!toAppend.isEmpty()) {
         fileUser.seek(fileUser.size());
         fileUser.write(toAppend.toUtf8());
@@ -505,6 +555,8 @@ void MainWindow::onGenerateCode() {
           "    soundsys_init();\n\n"
           "    load_project_resources();\n"
           "    npc_paths_init();\n\n"
+          "    // Enable billboards (1=single plane, 1=direction)\n"
+          "    RAY_SET_BILLBOARD(1, 1);\n\n"
           "    // [[ED_STARTUP_SCENE_START]]\n"
           "    " +
           generator.processTemplate("{{STARTUP_SCENE}}") +

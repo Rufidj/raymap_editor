@@ -38,9 +38,13 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
     out << "    double scale;\n";
     out << "    // AI and Combat Variables\n";
     out << "    int s_id;\n";
+    out << "    int s_idx;\n";
     out << "    double d_dist;\n";
     out << "    int behavior_timer;\n";
-    out << "    int _npc_ang;\n"; // Used by action_npc_chase / action_npc_flee
+    out << "    double last_health;\n";
+    out << "    int _npc_target;\n"; // Cached target process ID
+    out << "    int colliding;\n"; // Collision target for graphs
+    out << "    int recovery_timer;\n";
     out << "    int current_anim_start, current_anim_end, "
            "current_anim_speed;\n";
     out << "    int anim_current_frame, anim_next_frame;\n";
@@ -58,7 +62,7 @@ QString ProcessGenerator::generateProcessCode(const QString &processName,
     out << "    current_anim_speed = 0;\n";
     out << "    anim_current_frame = 0; anim_next_frame = 0;\n";
     out << "    anim_interpolation = 0.0;\n";
-    out << "    npc_path_active = 1;\n";
+    out << "    npc_path_active = 1;\n    recovery_timer = 0;\n";
     out << "    \n";
     out << "    // Get spawn position from flag\n";
     out << "    world_x = RAY_GET_FLAG_X(spawn_id);\n";
@@ -255,13 +259,15 @@ QString ProcessGenerator::generateAllProcessesCode(
     }
   }
 
-  // Global player position for NPC AI (avoids buggy inter-process _id.x access)
-  out << "// Global player position (shared with NPCs for reliable distance "
-         "calculation)\n";
-  out << "global\n";
-  out << "  double g_player_x;\n";
-  out << "  double g_player_y;\n";
-  out << "  double g_player_z;\n";
+  out << "// Combat and identity variables accessible across processes\n";
+  out << "local\n";
+  out << "  float health;\n";
+  out << "  int is_dead;\n";
+  out << "  int collision_detected;\n";
+  out << "  int _npc_target;\n";
+  out << "  int attack_hit_timer;\n";
+  out << "  double last_health;\n";
+  out << "  string ent_name;\n";
   out << "end\n\n";
 
   // Generate one process per entity INSTANCE (not per unique name)
@@ -337,6 +343,17 @@ QString ProcessGenerator::generateDeclarationsSection(
   QString declarations;
   QTextStream out(&declarations);
 
+  // Global player position for NPC AI and Delta Time
+  out << "// Global variables shared across all auto-generated processes\n";
+  out << "GLOBAL\n";
+  out << "    double g_player_x;\n";
+  out << "    double g_player_y;\n";
+  out << "    double g_player_z;\n";
+  out << "    int    g_player_health;\n";
+  out << "    double g_delta_time;   // seconds since last frame (FPS-independent)\n";
+  out << "    int    g_last_frame_ms; // last get_timer() value\n";
+  out << "END\n\n";
+
   // Generate one declaration per entity instance
   QSet<QString> declaredNames;
   for (const EntityInstance &entity : entities) {
@@ -370,81 +387,132 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
   out << "// Asset: " << entity.assetPath << "\n";
   out << "// ========================================\n\n";
 
+  // Pre-generate graph code to check for event presence
+  QString actionCode = entity.customAction;
+  if (!entity.behaviorGraph.nodes.isEmpty()) {
+    actionCode = ProcessGenerator::generateGraphCode(
+        entity, entity.behaviorGraph, "event_start", playerTypeName);
+  }
+
+  QString updateCode;
+  if (!entity.behaviorGraph.nodes.isEmpty()) {
+    updateCode = ProcessGenerator::generateGraphCode(
+        entity, entity.behaviorGraph, "event_update", playerTypeName);
+  }
+
+  QString collisionCode;
+  if (!entity.behaviorGraph.nodes.isEmpty()) {
+    collisionCode = ProcessGenerator::generateGraphCode(
+        entity, entity.behaviorGraph, "event_collision", playerTypeName);
+  }
+
+  QString deathCode;
+  if (!entity.behaviorGraph.nodes.isEmpty()) {
+    deathCode = ProcessGenerator::generateGraphCode(
+        entity, entity.behaviorGraph, "event_death", playerTypeName);
+  }
+
+  QString playerDeathCode;
+  if (!entity.behaviorGraph.nodes.isEmpty()) {
+    playerDeathCode = ProcessGenerator::generateGraphCode(
+        entity, entity.behaviorGraph, "event_player_death", playerTypeName);
+  }
+
   out << "process " << entity.processName
       << "(int param_x, int param_y, int param_z, int param_angle)\n";
   out << "private\n";
 
+  // Hitbox graphic handle
+  out << "    int hitbox_id;\n";
   // Common variables - double for radians/subpixel precision
-  out << "    double world_x; double world_y; double world_z; double "
-         "world_angle;\n";
-
-  if (entity.type == "model" || entity.type == "gltf") {
-    out << "    int model_id;\n";
-    out << "    int texture_id;\n";
-    out << "    int sprite_id;\n";
-    out << "    double rotation;\n";
-    out << "    double scale;\n";
-    out << "    double anim_interpolation;\n";
-    out << "    int anim_current_frame;\n";
-    out << "    int anim_next_frame;\n";
-    out << "    int current_anim_start;\n";
-    out << "    int current_anim_end;\n";
-    out << "    double current_anim_speed;\n";
-  } else if (entity.type == "campath") {
-    out << "    int campath_id;\n";
-  }
-
-  // Behavior-specific variables (always present for sound/engine actions)
+  out << "    double world_x; double world_y; double world_z; double world_angle;\n";
+  out << "    double dx, dy, dz, d_dist;\n";
+  out << "    int player_death_triggered = 0;\n";
+  out << "    int s_idx; int recovery_timer; int colliding;\n";
   out << "    int car_engine_id;\n";
-  if (entity.activationType == EntityInstance::ACTIVATION_ON_EVENT) {
-    out << "    int event_triggered;\n";
+  
+  out << "    public\n";
+  out << "        int npc_path_active;\n";
+  
+  if (entity.type == "model" || entity.type == "gltf") {
+    out << "        int model_id;\n";
+    out << "        int texture_id;\n";
+    out << "        int sprite_id;\n";
+    out << "        double rotation;\n";
+    out << "        double scale;\n";
+    out << "        double anim_interpolation;\n";
+    out << "        int anim_current_frame;\n";
+    out << "        int anim_next_frame;\n";
+    out << "        int current_anim_start;\n";
+    out << "        int current_anim_end;\n";
+    out << "        double current_anim_speed;\n";
+  } else if (entity.type == "campath") {
+    out << "        int campath_id;\n";
   }
 
-  // Player or Car behavior-specific variables
+  if (entity.activationType == EntityInstance::ACTIVATION_ON_EVENT) {
+    out << "        int event_triggered;\n";
+  }
+
   if (entity.isPlayer || entity.controlType == EntityInstance::CONTROL_CAR) {
-    out << "    double move_speed;\n";
-    out << "    double rot_speed;\n";
-    out << "    double player_angle;\n";
-    out << "    double turn_offset;\n";
-    out << "    double angle_milis_car;\n";
-    out << "    double speed;\n";
+    out << "        double move_speed;\n";
+    out << "        double rot_speed;\n";
+    out << "        double player_angle;\n";
+    out << "        double turn_offset;\n";
+    out << "        double angle_milis_car;\n";
+    out << "        double speed;\n";
   }
 
   if (entity.isPlayer) {
-    out << "    double pitch_speed;\n";
-    out << "    double player_pitch;\n";
-    out << "    double cx, cy, cz, s, c, angle_deg;\n";
-    out << "    double cam_angle_off;\n";
-    out << "    double move_angle;\n";
-    out << "    double cam_safe_x, cam_safe_y, cam_dx, cam_dy;\n";
-    out << "    double cam_test_x, cam_test_y;\n";
-    out << "    int cam_steps, cam_i;\n";
-    out << "    double angle_milis;\n";
+    out << "        double pitch_speed;\n";
+    out << "        double player_pitch;\n";
+    out << "        double cam_angle_off;\n";
+    out << "        double move_angle;\n";
+    out << "        double cam_safe_x, cam_safe_y, cam_dx, cam_dy;\n";
+    out << "        double cam_test_x, cam_test_y;\n";
+    out << "        int cam_steps, cam_i;\n";
+    out << "        double angle_milis;\n";
   }
 
   if (entity.npcPathId >= 0) {
-    out << "    // NPC Path following variables\n";
-    out << "    int npc_current_waypoint;\n";
-    out << "    int npc_wait_counter;\n";
-    out << "    int npc_direction; // For ping-pong mode\n";
-    out << "    int npc_path_active;\n";
+    out << "        int npc_current_waypoint;\n";
+    out << "        int npc_wait_counter;\n";
+    out << "        int npc_direction;\n";
   }
 
-  // Utility variables for asset loading and behavior
-  out << "    string texture_path_base;\n";
-  out << "    string alt_path;\n";
-  out << "    int s_id;\n";
-  out << "    int cur_speed;\n";
-  out << "    int speed_vol;\n";
-  out << "    int collision_target;\n";
-  out << "    int collision_detected;\n";
-  out << "    double dx, dy, dz, d_dist;\n";
-  out << "    double angle_to_target;\n";
-  out << "    int behavior_timer;\n";
-  out << "    int _npc_ang;\n"; // Used by action_npc_chase / action_npc_flee
-
+  out << "        string texture_path_base;\n";
+  out << "        string alt_path;\n";
+  out << "        int s_id;\n";
+  out << "        int cur_speed;\n";
+  out << "        int speed_vol;\n";
+  out << "        int collision_target;\n";
+  out << "        double angle_to_target;\n";
+  out << "        int behavior_timer;\n";
+  out << "        int _npc_ang;\n";
+  out << "        int is_attacking;\n";
+  out << "        int pending_dmg;\n";
+  out << "        double cx, cy, cz, s, c, angle_deg;\n";
   out << "begin\n";
   out << "    car_engine_id = 0;\n";
+  out << "    health = 100.0; // Init local health\n";
+  out << "    last_health = 100.0;\n";
+  out << "    is_dead = 0;\n";
+  out << "    is_attacking = 0;\n";
+  out << "    attack_hit_timer = 0;\n";
+  out << "    pending_dmg = 0;\n";
+  out << "    recovery_timer = 0;\n";
+  out << "    colliding = -1;\n";
+  out << "    s_idx = -1;\n";
+  out << "    npc_path_active = 0;\n";
+  out << "    \n";
+  out << "    // Create collision hitbox (Generic for 3D Actors)\n";
+  out << "    hitbox_id = map_new(10, 10, 32);\n";
+  out << "    map_clear(0, hitbox_id, rgb(255, 255, 255));\n";
+  out << "    graph = hitbox_id;\n";
+  out << "    size = " << qRound((entity.width / 10.0f) * 100.0f) << ";\n";
+  out << "    flags = 4; // Center graph and make it invisible-ish\n";
+  out << "    \n";
+  out << "    ent_name = \"" << entity.processName << "\";\n";
   if (entity.type == "model" || entity.type == "gltf") {
     out << "    model_id = 0;\n";
     out << "    texture_id = 0;\n";
@@ -463,17 +531,15 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "    campath_id = 0;\n";
   }
 
-  if (entity.activationType == EntityInstance::ACTIVATION_ON_COLLISION) {
-    QString target = entity.collisionTarget;
-    if (target == "TYPE_PLAYER" && !playerTypeName.isEmpty()) {
-      target = "type " + playerTypeName;
-    } else if (target.toLower() == "player" && !playerTypeName.isEmpty()) {
-      target = "type " + playerTypeName;
-    }
-    out << "    collision_target = " << target << ";\n";
+  // Keep graph = 0 for 3D entities (no 2D rendering)
+  // Collision is handled via d_dist proximity check, not 2D collision()
+  out << "    graph = 0; // Disable 2D rendering for 3D entities\n";
+
+  // Store collision proximity threshold (80 world units = touching distance)
+  bool hasCollisionEvent = !collisionCode.isEmpty();
+  if ((entity.activationType == EntityInstance::ACTIVATION_ON_COLLISION ||
+       hasCollisionEvent) && !entity.isPlayer) {
     out << "    collision_detected = 0;\n";
-  } else if (entity.activationType == EntityInstance::ACTIVATION_ON_EVENT) {
-    out << "    event_triggered = 0;\n";
   }
 
   if (entity.isPlayer) {
@@ -536,23 +602,27 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
         << "\"" << wrapperClose << ");\n";
 
     out << "    // Try PNG then JPG\n";
-    out << "    texture_id = map_load(texture_path_base + \".png\");\n";
-    out << "    if (texture_id <= 0) texture_id = map_load(texture_path_base + "
-           "\".jpg\"); end\n";
+    out << "    texture_id = map_load(" << wrapperOpen
+        << "texture_path_base + \".png\"" << wrapperClose << ");\n";
+    out << "    if (texture_id <= 0) texture_id = map_load(" << wrapperOpen
+        << "texture_path_base + \".jpg\"" << wrapperClose << "); end\n";
 
     out << "    if (texture_id <= 0)\n";
     out << "       // Try same directory as model\n";
     out << "       alt_path = \"assets/md3/\" + \""
         << QFileInfo(entity.assetPath).baseName() << "\";\n";
-    out << "       texture_id = map_load(alt_path + \".png\");\n";
-    out << "       if (texture_id <= 0) texture_id = map_load(alt_path + "
-           "\".jpg\"); end\n";
+    out << "       texture_id = map_load(" << wrapperOpen
+        << "alt_path + \".png\"" << wrapperClose << ");\n";
+    out << "       if (texture_id <= 0) texture_id = map_load(" << wrapperOpen
+        << "alt_path + \".jpg\"" << wrapperClose << "); end\n";
     out << "    end\n";
 
     out << "    if (model_id == 0) say(\"[" << entity.processName
-        << "] ERROR: Failed to load model: " << cleanPath << "\"); end\n";
+        << "] ERROR: Failed to load model: \" + " << wrapperOpen << "\""
+        << cleanPath << "\"" << wrapperClose << "); end\n";
     out << "    if (texture_id == 0) say(\"[" << entity.processName
-        << "] WARNING: Failed to load texture: \" + texture_path_base); end\n";
+        << "] WARNING: Failed to load texture: \" + " << wrapperOpen
+        << "texture_path_base" << wrapperClose << "); end\n";
     out << "    if (model_id == 0)\n";
     out << "        // RAY_CLEAR_FLAG();\n";
     out << "        return;\n";
@@ -712,308 +782,221 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     }
   }
 
+  // --- SCAN BEHAVIOR GRAPH FOR UNIFIED PARAMS (CHASE, DAMAGE, ETC) ---
+  bool hasChase = false;
+  QString chaseSpeed = "1";
+  int chaseRange = 400;
+  bool hasDamage = false;
+  QString damageAmount = "10";
+  QString hitFrame = ""; 
+
+  for (const auto &node : entity.behaviorGraph.nodes) {
+    if (node.type == "action_npc_chase") {
+      hasChase = true;
+      if (node.pins.size() > 3 && !node.pins[3].value.isEmpty())
+        chaseSpeed = node.pins[3].value;
+    }
+    if (node.type == "logic_compare") {
+      if (node.pins.size() > 2 && !node.pins[2].value.isEmpty()) {
+        bool ok;
+        int val = node.pins[2].value.toInt(&ok);
+        if (ok && val > 0) chaseRange = val;
+      }
+    }
+    if (node.type == "action_damage") {
+      hasDamage = true;
+      if (node.pins.size() > 2 && !node.pins[2].value.isEmpty())
+        damageAmount = node.pins[2].value;
+      if (node.pins.size() > 4 && !node.pins[4].value.isEmpty() && node.pins[4].value != "0")
+        hitFrame = node.pins[4].value;
+    }
+  }
+
   // Behavior implementation
   out << "    // ===== BEHAVIOR =====\n";
 
-  QString actionCode = entity.customAction;
-
-  // Use Behavior Graph if it has nodes
-  if (!entity.behaviorGraph.nodes.isEmpty()) {
-    actionCode = ProcessGenerator::generateGraphCode(
-        entity, entity.behaviorGraph, "event_start", playerTypeName);
-  }
-
-  QString updateCode;
-  if (!entity.behaviorGraph.nodes.isEmpty()) {
-    updateCode = ProcessGenerator::generateGraphCode(
-        entity, entity.behaviorGraph, "event_update", playerTypeName);
-  }
-
-  QString collisionCode;
-  if (!entity.behaviorGraph.nodes.isEmpty()) {
-    collisionCode = ProcessGenerator::generateGraphCode(
-        entity, entity.behaviorGraph, "event_collision", playerTypeName);
-  }
-
   switch (entity.activationType) {
-  case EntityInstance::ACTIVATION_ON_START:
+  case EntityInstance::ACTIVATION_ON_START: {
     out << "    // Activate on start\n";
     if (!actionCode.isEmpty()) {
       QString customCode = actionCode;
       out << "    " << customCode.replace("\n", "\n    ") << "\n";
     }
+    out << "    g_last_frame_ms = get_timer();\n";
     out << "    loop\n";
-
-    if (entity.isPlayer) {
-      out << "        move_angle = player_angle + cam_angle_off;\n";
-
-      switch (entity.controlType) {
-      case EntityInstance::CONTROL_FIRST_PERSON:
-        out << "        if (key(_w)) RAY_MOVE_FORWARD(move_speed); end\n";
-        out << "        if (key(_s)) RAY_MOVE_BACKWARD(move_speed); end\n";
-        out << "        if (key(_a)) RAY_STRAFE_LEFT(move_speed); end\n";
-        out << "        if (key(_d)) RAY_STRAFE_RIGHT(move_speed); end\n";
-        out << "        if (key(_left)) RAY_ROTATE(-rot_speed); end\n";
-        out << "        if (key(_right)) RAY_ROTATE(rot_speed); end\n";
-        out << "        if (key(_up)) RAY_LOOK_UP_DOWN(pitch_speed); end\n";
-        out << "        if (key(_down)) RAY_LOOK_UP_DOWN(-pitch_speed); end\n";
-        out << "        world_x = RAY_GET_CAMERA_X(); world_y = "
-               "RAY_GET_CAMERA_Y(); world_z = RAY_GET_CAMERA_Z();\n";
-        out << "        player_angle = RAY_GET_CAMERA_ROT(); player_pitch = "
-               "RAY_GET_CAMERA_PITCH();\n";
-        break;
-
-      case EntityInstance::CONTROL_THIRD_PERSON:
-        out << "        angle_milis = player_angle * 57295.8;\n";
-        out << "        dx = 0; dy = 0;\n";
-
-        out << "        if (key(_left)) player_angle += rot_speed; end\n";
-        out << "        if (key(_right)) player_angle -= rot_speed; end\n";
-
-        out << "        if (key(_w)) dx += cos(angle_milis) * move_speed; dy "
-               "+= sin(angle_milis) * move_speed; end\n";
-        out << "        if (key(_s)) dx -= cos(angle_milis) * move_speed; dy "
-               "-= sin(angle_milis) * move_speed; end\n";
-        out << "        if (key(_a)) dx += cos(angle_milis + 90000) * "
-               "move_speed; dy += sin(angle_milis + 90000) * move_speed; end\n";
-        out << "        if (key(_d)) dx += cos(angle_milis - 90000) * "
-               "move_speed; dy += sin(angle_milis - 90000) * move_speed; end\n";
-
-        out << "        // Apply movement with collision (Sliding)\n";
-        out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z, "
-               "world_x + dx, world_y) == 0) world_x += dx; end\n";
-        out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z, "
-               "world_x, world_y + dy) == 0) world_y += dy; end\n";
-
-        out << "        if (key(_up)) player_pitch += pitch_speed; if "
-               "(player_pitch > 1.2) player_pitch = 1.2; end end\n";
-        out << "        if (key(_down)) player_pitch -= pitch_speed; if "
-               "(player_pitch < -1.2) player_pitch = -1.2; end end\n";
-        break;
-
-      case EntityInstance::CONTROL_CAR:
-        out << "        angle_milis_car = player_angle * 57295.8;\n";
-        out << "        dx = 0; dy = 0;\n";
-        out << "        turn_offset *= 0.8;\n";
-
-        out << "        if (key(_left) || key(_a)) player_angle -= rot_speed; "
-               "turn_offset -= 5.0; end\n";
-        out << "        if (key(_right) || key(_d)) player_angle += rot_speed; "
-               "turn_offset += 5.0; end\n";
-
-        if (entity.physicsEnabled) {
-          // Physics-based movement (Force = gradual acceleration)
-          out << "        if (key(_w) || key(_up))\n";
-          out << "            RAY_PHYSICS_APPLY_FORCE(sprite_id, "
-                 "cos(angle_milis_car) * move_speed * "
-              << (entity.physicsMass * 200.0f)
-              << ", "
-                 "sin(angle_milis_car) * move_speed * "
-              << (entity.physicsMass * 200.0f) << ", 0);\n";
-          out << "        end\n";
-          out << "        if (key(_s) || key(_down))\n";
-          out << "            RAY_PHYSICS_APPLY_FORCE(sprite_id, "
-                 "-cos(angle_milis_car) * move_speed * "
-              << (entity.physicsMass * 120.0f)
-              << ", "
-                 "-sin(angle_milis_car) * move_speed * "
-              << (entity.physicsMass * 120.0f) << ", 0);\n";
-          out << "        end\n";
-          // Sync world position from physics engine
-          out << "        world_x = RAY_GET_SPRITE_X(sprite_id); world_y = "
-                 "RAY_GET_SPRITE_Y(sprite_id); world_z = "
-                 "RAY_GET_SPRITE_Z(sprite_id);\n";
-          // Broadcast player position to global vars for NPC AI
-          out << "        g_player_x = world_x; g_player_y = world_y; "
-                 "g_player_z = world_z;\n";
+        out << "        // --- 1. CORE STATE: DEATH & DAMAGE (UNIFIED) ---\n";
+        out << "        if (is_dead == 0 and health <= 0.0)\n";
+        out << "            is_dead = 1;\n";
+        out << "            npc_path_active = 0;\n";
+        if (!deathCode.isEmpty()) {
+            out << "            " << deathCode.replace("\n", "\n            ") << "\n";
         } else {
-          // Manual Tank-Drive Move (Coordinate-based)
-          out << "        if (key(_w) || key(_up))\n";
-          out << "            dx += cos(player_angle * 57295.8) * "
-                 "move_speed;\n";
-          out << "            dy += sin(player_angle * 57295.8) * "
-                 "move_speed;\n";
-          out << "        end\n";
-          out << "        if (key(_s) || key(_down))\n";
-          out << "            dx -= cos(player_angle * 57295.8) * "
-                 "move_speed;\n";
-          out << "            dy -= sin(player_angle * 57295.8) * "
-                 "move_speed;\n";
-          out << "        end\n";
-
-          // Cars should NOT step up walls - use very low step height
-          out << "        RAY_SET_STEP_HEIGHT(5.0);\n";
-          // Apply collision against sectors AND sprites
-          out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z "
-                 "+ 5.0, world_x + dx, world_y) == 0 and "
-                 "RAY_CHECK_SPRITE_COLLISION(sprite_id, world_x + dx, world_y, "
-              << (entity.width / 2.0f) << ") < 0) world_x += dx; end\n";
-          out << "        if (RAY_CHECK_COLLISION_Z(world_x, world_y, world_z "
-                 "+ 5.0, world_x, world_y + dy) == 0 and "
-                 "RAY_CHECK_SPRITE_COLLISION(sprite_id, world_x, world_y + dy, "
-              << (entity.width / 2.0f) << ") < 0) world_y += dy; end\n";
-          out << "        RAY_SET_STEP_HEIGHT(32.0);\n";
+            out << "            fx_hit(world_x, world_y, world_z + 32);\n";
         }
-        break;
-
-      default:
-        // Default sync for non-player entities
-        if (!entity.isPlayer &&
-            entity.controlType == EntityInstance::CONTROL_CAR) {
-          out << "        player_angle = world_angle;\n";
+        if (entity.isPlayer && !playerDeathCode.isEmpty()) {
+            out << "            " << playerDeathCode.replace("\n", "\n            ") << "\n";
         }
-        break;
-      }
+        out << "        end\n\n";
 
-      if (entity.cameraFollow) {
-        if (entity.controlType == EntityInstance::CONTROL_THIRD_PERSON ||
-            entity.controlType == EntityInstance::CONTROL_CAR) {
-          float ox =
-              (entity.cameraOffset_x == 0) ? -400.0f : entity.cameraOffset_x;
-          float oy = entity.cameraOffset_y;
-          float oz =
-              (entity.cameraOffset_z == 0) ? 150.0f : entity.cameraOffset_z;
-
-          out << "        // Chase Camera - Follows vehicle rotation\n";
-          out << "        angle_deg = (player_angle + cam_angle_off) * "
-                 "180000.0 / 3.14159;\n";
-          out << "        s = sin(angle_deg); c = cos(angle_deg);\n";
-          out << "        cx = world_x + c*(" << ox << ") - s*(" << oy
-              << ");\n";
-          out << "        cy = world_y + s*(" << ox << ") + c*(" << oy
-              << ");\n";
-          out << "        \n";
-          // Camera collision avoidance
-          out << "        // Camera collision avoidance\n";
-          out << "        cam_safe_x = world_x; cam_safe_y = world_y;\n";
-          out << "        cam_dx = cx - world_x; cam_dy = cy - world_y;\n";
-          out << "        cam_steps = 10;\n";
-          out << "        from cam_i = 1 to cam_steps;\n";
-          out << "            cam_test_x = world_x + (cam_dx * cam_i / "
-                 "cam_steps);\n";
-          out << "            cam_test_y = world_y + (cam_dy * cam_i / "
-                 "cam_steps);\n";
-          out << "            // Use high step_height (100) to ignore "
-                 "curbs/low walls\n";
-          out << "            if (RAY_CHECK_COLLISION_EXT(world_x, world_y, "
-                 "world_z + "
-              << oz << ", cam_test_x, cam_test_y, 100.0))\n";
-          out << "                break;\n";
-          out << "            end\n";
-          out << "            cam_safe_x = cam_test_x;\n";
-          out << "            cam_safe_y = cam_test_y;\n";
-          out << "        end\n";
-
-          // Safety: Don't let the camera get TOO close to the car
-          out << "        cx = cam_safe_x; cy = cam_safe_y;\n";
-          out << "        if (abs(cx - world_x) < 50 and abs(cy - world_y) < "
-                 "50)\n";
-          out << "            cx = world_x; cy = world_y;\n";
-          out << "        end\n";
-
-          out << "        RAY_SET_CAMERA(cx, cy, world_z + (" << oz
-              << "), player_angle + cam_angle_off, player_pitch);\n";
+        out << "        if (health < last_health)\n";
+        out << "            recovery_timer = 12;\n";
+            out << "            if (health <= 0.0)\n";
+            QString onDeathGen = ProcessGenerator::generateGraphCode(entity, entity.behaviorGraph, "event_death", playerTypeName);
+            if (!onDeathGen.isEmpty()) {
+                out << "                " << onDeathGen.replace("\n", "\n                ") << "\n";
+            }
+            out << "            end\n";
+            out << "            is_dead = 1; npc_path_active = 0; collision_detected = 0;\n";
+            out << "            // Force death animation if none set\n";
+            out << "            if (current_anim_start == 0) current_anim_start = 78; current_anim_end = 148; end\n";
+        QString onDamageGen = ProcessGenerator::generateGraphCode(entity, entity.behaviorGraph, "event_damage", playerTypeName);
+        if (!onDamageGen.isEmpty()) {
+            out << "            " << onDamageGen.replace("\n", "\n            ") << "\n";
         }
-        // For First Person, RAY_SET_CAMERA is handled internally by the engine
-      }
-    }
-
-    if (entity.isPlayer || entity.controlType == EntityInstance::CONTROL_CAR) {
-      out << "        world_angle = player_angle + (turn_offset * 0.005);\n";
-    }
-
-    if (entity.type == "campath") {
-      out << "        if (RAY_CAMERA_IS_PLAYING())\n";
-      out << "            RAY_CAMERA_PATH_UPDATE(0.0166);\n";
-      out << "            world_x = RAY_GET_CAMERA_X();\n";
-      out << "            world_y = RAY_GET_CAMERA_Y();\n";
-      out << "            world_z = RAY_GET_CAMERA_Z();\n";
-      out << "        end\n";
-    }
-
-    if (entity.snapToFloor && (entity.npcPathId < 0 || !entity.autoStartPath)) {
-      out << "        // Snap to floor for non-path entities\n";
-      out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
-    }
-
-    if (entity.npcPathId >= 0) {
-      out << "        // Automatic NPC Path Following\n";
-      out << "        if (npc_path_active == 1)\n";
-      out << "            npc_follow_path(" << entity.npcPathId
-          << ", &npc_current_waypoint, &npc_wait_counter, &npc_direction, "
-             "&world_x, &world_y, &world_z, &world_angle, "
-          << (entity.snapToFloor ? "1" : "0") << ");\n";
-      out << "        else\n";
-      out << "            // if (entity.isPlayer == 0) say(\"Entity \" + name "
-             "+ \" path inactive\"); end\n";
-      out << "        end\n";
-    }
-
-    out << "        if (behavior_timer > 0) behavior_timer = behavior_timer - "
-           "1; end\n";
-
-    // Pre-compute distance to player using global vars (reliable)
-    if (!entity.isPlayer && !updateCode.isEmpty()) {
-      out << "        // Distance to player (global position - avoids "
-             "inter-process bug)\n";
-      out << "        dx = world_x - g_player_x;\n";
-      out << "        dy = world_y - g_player_y;\n";
-      out << "        d_dist = sqrt(dx*dx + dy*dy);\n";
-    }
-
-    if (!updateCode.isEmpty()) {
-      out << "        // Behavior Update (Each Frame)\n";
-      out << "        " << updateCode.replace("\n", "\n        ") << "\n";
-    }
-
-    // Auto return to patrol when player is far away
-    if (!entity.isPlayer && entity.npcPathId >= 0 && !updateCode.isEmpty()) {
-      out << "        // Auto-disengage: return to patrol if player is far\n";
-      out << "        if (npc_path_active == 0 && d_dist > 2000)\n";
-      out << "            npc_path_active = 1;\n";
-      out << "        end\n";
-      out << "        // Restore walk animation when patrolling\n";
-      out << "        if (npc_path_active == 1 && current_anim_start != 0)\n";
-      out << "            current_anim_start = 0; current_anim_end = 14; "
-             "current_anim_speed = 10;\n";
-      out << "            anim_current_frame = 0; anim_next_frame = 1;\n";
-      out << "            anim_interpolation = 0.0;\n";
-      out << "        end\n";
-    }
-
-    if (entity.type == "model" || entity.type == "gltf") {
-      out << "        x = world_x; y = world_y; z = world_z;\n";
-      out << "        RAY_UPDATE_SPRITE_POSITION(sprite_id, world_x, world_y, "
-             "world_z);\n";
-      out << "        RAY_SET_SPRITE_ANGLE(sprite_id, world_angle * "
-             "57.2957);\n";
-
-      out << "        // Animation Logic\n";
-      if (entity.type == "model") {
-        out << "        if (current_anim_speed != 0)\n";
-        out << "            anim_interpolation = anim_interpolation + "
-               "(abs(current_anim_speed) / 60.0);\n";
-        out << "            if (anim_interpolation >= 1.0)\n";
-        out << "                anim_interpolation = 0.0;\n";
-        out << "                anim_current_frame = anim_next_frame;\n";
-        out << "                anim_next_frame = anim_current_frame + 1;\n";
-        out << "                if (anim_next_frame > current_anim_end) "
-               "anim_next_frame = current_anim_start; end\n";
-        out << "            end\n";
         out << "        end\n";
-        out << "        RAY_SET_SPRITE_ANIM(sprite_id, anim_current_frame, "
-               "anim_next_frame, anim_interpolation);\n";
-      } else {
-        out << "        RAY_SET_SPRITE_GLB_ANIM(sprite_id, current_anim_start, "
-               "anim_interpolation);\n";
-      }
-    }
+        out << "        last_health = health;\n";
+        out << "        if (recovery_timer > 0) recovery_timer--; end\n\n";
 
-    out << "        // USER HOOK: Update\n";
-    out << "        hook_" << hookBaseName << "_update(id);\n";
-    out << "        frame;\n";
+        // --- 2. GLOBAL COLLISION DETECTION (Bi-directional) ---
+        out << "        s_idx = RAY_CHECK_SPRITE_COLLISION(sprite_id, world_x, world_y, " << (entity.width / 1.5f) << ");\n";
+        out << "        if (s_idx >= 0)\n";
+        out << "            _npc_target = RAY_GET_SPRITE_ID(s_idx);\n";
+        out << "            if (_npc_target > 0)\n";
+        out << "                collision_detected = 1;\n";
+        out << "                _npc_target.collision_detected = 1; // Alert the other one\n";
+        out << "                _npc_target._npc_target = sprite_id; // Set myself as its target\n";
+        if (entity.controlType == EntityInstance::CONTROL_CAR) {
+            out << "                if (move_speed > 2.0) _npc_target.health = _npc_target.health - (move_speed * 10.0); end\n";
+        }
+        out << "            end\n";
+        if (!collisionCode.isEmpty()) {
+            out << "            " << collisionCode.replace("\n", "\n            ") << "\n";
+        }
+        out << "        else\n";
+        out << "            collision_detected = 0;\n";
+        out << "        end\n";
+
+        // --- 3. INPUTS / AI / PATHS ---
+        out << "        if (is_dead == 0)\n";
+        if (entity.isPlayer) {
+            switch (entity.controlType) {
+                case EntityInstance::CONTROL_FIRST_PERSON:
+                    out << "        if (key(_w)) RAY_MOVE_FORWARD(move_speed); end\n";
+                    out << "        if (key(_s)) RAY_MOVE_BACKWARD(move_speed); end\n";
+                    out << "        if (key(_a)) RAY_STRAFE_LEFT(move_speed); end\n";
+                    out << "        if (key(_d)) RAY_STRAFE_RIGHT(move_speed); end\n";
+                    out << "        if (key(_left)) RAY_ROTATE(-rot_speed); end\n";
+                    out << "        if (key(_right)) RAY_ROTATE(rot_speed); end\n";
+                    out << "        if (key(_up)) RAY_LOOK_UP_DOWN(pitch_speed); end\n";
+                    out << "        if (key(_down)) RAY_LOOK_UP_DOWN(-pitch_speed); end\n";
+                    out << "        world_x = RAY_GET_CAMERA_X(); world_y = RAY_GET_CAMERA_Y(); world_z = RAY_GET_CAMERA_Z();\n";
+                    out << "        player_angle = RAY_GET_CAMERA_ROT(); player_pitch = RAY_GET_CAMERA_PITCH();\n";
+                    break;
+                case EntityInstance::CONTROL_CAR:
+                    out << "        angle_milis_car = player_angle * 57295.8; dx = 0; dy = 0; turn_offset *= 0.8;\n";
+                    out << "        if (key(_left) || key(_a)) player_angle -= rot_speed; turn_offset -= 5.0; end\n";
+                    out << "        if (key(_right) || key(_d)) player_angle += rot_speed; turn_offset += 5.0; end\n";
+                    if (entity.physicsEnabled) {
+                        out << "        if (key(_w) || key(_up)) RAY_PHYSICS_APPLY_FORCE(sprite_id, cos(angle_milis_car) * move_speed * " << (entity.physicsMass * 200.0f) << ", sin(angle_milis_car) * move_speed * " << (entity.physicsMass * 200.0f) << ", 0); end\n";
+                        out << "        if (key(_s) || key(_down)) RAY_PHYSICS_APPLY_FORCE(sprite_id, -cos(angle_milis_car) * move_speed * " << (entity.physicsMass * 120.0f) << ", -sin(angle_milis_car) * move_speed * " << (entity.physicsMass * 120.0f) << ", 0); end\n";
+                        out << "        world_x = RAY_GET_SPRITE_X(sprite_id); world_y = RAY_GET_SPRITE_Y(sprite_id); world_z = RAY_GET_SPRITE_Z(sprite_id);\n";
+                    } else {
+                        out << "        if (key(_w) || key(_up)) dx += cos(player_angle * 57295.8) * move_speed * 60 * g_delta_time; dy += sin(player_angle * 57295.8) * move_speed * 60 * g_delta_time; end\n";
+                        out << "        if (key(_s) || key(_down)) dx -= cos(player_angle * 57295.8) * move_speed * 60 * g_delta_time; dy -= sin(player_angle * 57295.8) * move_speed * 60 * g_delta_time; end\n";
+                        out << "        RAY_SET_STEP_HEIGHT(5.0);\n";
+                    }
+                    break;
+            }
+            out << "        g_player_x = world_x; g_player_y = world_y; g_player_z = world_z; g_player_health = health;\n";
+        } else {
+            // NPC AI / PATHS / OTHERS
+            out << "        dx = world_x - g_player_x; dy = world_y - g_player_y; d_dist = sqrt(dx*dx + dy*dy);\n";
+            if (entity.npcPathId >= 0) {
+                out << "        if (npc_path_active == 1)\n";
+                out << "            npc_follow_path(" << entity.npcPathId << ", &npc_current_waypoint, &npc_wait_counter, &npc_direction, &world_x, &world_y, &world_z, &world_angle, " << (entity.snapToFloor ? "1" : "0") << ");\n";
+                out << "        end\n";
+            }
+            if (hasChase || hasDamage) {
+                out << "        if (is_dead == 0 and g_player_health > 0.0 and recovery_timer == 0)\n";
+                int touchDist = entity.width > 0 ? entity.width * 2 : 80;
+                if (hasDamage) {
+                    out << "            if (d_dist < " << touchDist << ")\n";
+                    out << "                collision_detected = 1; npc_path_active = 0;\n";
+                    out << "                world_angle = -fget_angle(0, 0, (g_player_x - world_x)*1000.0, (g_player_y - world_y)*1000.0) / 57295.78;\n";
+                    QString hf2 = hitFrame.isEmpty() ? "current_anim_start + 5" : hitFrame;
+                    out << "                if (anim_current_frame >= " << hf2 << " and attack_hit_timer == 0)\n";
+                    out << "                    _npc_target = get_id(type " << playerTypeName << ");\n";
+                    out << "                    if (_npc_target > 0) _npc_target.health -= " << damageAmount << "; end\n";
+                    out << "                    attack_hit_timer = 1;\n";
+                    out << "                end\n";
+                    out << "                if (anim_current_frame <= current_anim_start + 2) attack_hit_timer = 0; end\n";
+                    out << "            else\n";
+                }
+                if (hasChase) {
+                    out << "                if (d_dist < " << (chaseRange * 4) << ")\n";
+                    out << "                    collision_detected = 0; npc_path_active = 0;\n";
+                    out << "                    world_angle = -fget_angle(0, 0, (g_player_x - world_x)*1000.0, (g_player_y - world_y)*1000.0) / 57295.78;\n";
+                    out << "                    world_x += ((g_player_x - world_x) / d_dist) * " << chaseSpeed << " * 180 * g_delta_time;\n";
+                    out << "                    world_y += ((g_player_y - world_y) / d_dist) * " << chaseSpeed << " * 180 * g_delta_time;\n";
+                    out << "                    if (current_anim_start != 0) current_anim_start = 0; current_anim_end = 14; current_anim_speed = 10; anim_current_frame = 0; anim_next_frame = 1; end\n";
+                    out << "                else\n";
+                    out << "                    collision_detected = 0; if (npc_path_active == 0) npc_path_active = 1; end\n";
+                    out << "                end\n";
+                }
+                if (hasDamage) out << "            end\n";
+                out << "        end\n";
+            }
+        }
+        out << "        end\n";
+        
+            if (entity.type == "campath") {
+            out << "        if (RAY_CAMERA_IS_PLAYING()) RAY_CAMERA_PATH_UPDATE(0.0166); world_x = RAY_GET_CAMERA_X(); world_y = RAY_GET_CAMERA_Y(); world_z = RAY_GET_CAMERA_Z(); end\n";
+        }
+
+        if (entity.snapToFloor && (entity.npcPathId < 0 || !entity.autoStartPath)) {
+            out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
+        }
+
+        // --- 4. GENERIC UPDATE LOGIC ---
+        if (!updateCode.isEmpty()) {
+            out << "        " << updateCode.replace("\n", "\n        ") << "\n";
+        }
+
+        // --- 5. VISUAL SYNC & CAMERA ---
+        if (entity.type == "model" || entity.type == "gltf") {
+            if (entity.isPlayer || entity.controlType == EntityInstance::CONTROL_CAR) {
+                out << "        world_angle = player_angle + (turn_offset * 0.005);\n";
+            }
+            out << "        RAY_UPDATE_SPRITE_POSITION(sprite_id, world_x, world_y, world_z);\n";
+            out << "        RAY_SET_SPRITE_ANGLE(sprite_id, (world_angle * 57.2957));\n";
+            
+            if (entity.cameraFollow && (entity.controlType == EntityInstance::CONTROL_THIRD_PERSON || entity.controlType == EntityInstance::CONTROL_CAR)) {
+                 out << "        cx = world_x - cos((player_angle + cam_angle_off) * 57295.8) * 450; cy = world_y - sin((player_angle + cam_angle_off) * 57295.8) * 450;\n";
+                 out << "        RAY_SET_CAMERA(cx, cy, world_z + 120, (player_angle + cam_angle_off), player_pitch);\n";
+            }
+            
+            out << "        if (current_anim_speed != 0)\n";
+            out << "            anim_interpolation += abs(current_anim_speed) * g_delta_time;\n";
+            out << "            if (anim_interpolation >= 1.0)\n";
+            out << "                anim_interpolation = 0.0; anim_current_frame = anim_next_frame; anim_next_frame++;\n";
+            out << "                if (anim_next_frame > current_anim_end) anim_next_frame = current_anim_start; end\n";
+            out << "            end\n";
+            out << "        end\n";
+            if (entity.type == "model") {
+                out << "        RAY_SET_SPRITE_ANIM(sprite_id, anim_current_frame, anim_next_frame, anim_interpolation);\n";
+            } else {
+                out << "        RAY_SET_SPRITE_GLB_ANIM(sprite_id, current_anim_start, anim_interpolation);\n";
+            }
+        }
+
+        out << "        g_delta_time = (get_timer() - g_last_frame_ms) / 1000.0;\n";
+        out << "        if (g_delta_time <= 0 or g_delta_time > 0.1) g_delta_time = 0.016; end\n";
+        out << "        g_last_frame_ms = get_timer();\n";
+        out << "        hook_" << hookBaseName << "_update(id);\n";
+        out << "        frame;\n";
     out << "    end\n";
     break;
+  }
 
   case EntityInstance::ACTIVATION_ON_COLLISION:
     out << "    // Activate on collision\n";
@@ -1021,7 +1004,8 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
       actionCode = collisionCode;
     }
     out << "    loop\n";
-    out << "        if (collision(collision_target) and collision_detected == "
+    out << "        if (collision(collision_target) and collision_detected "
+           "== "
            "0)\n";
     out << "            collision_detected = 1;\n";
     if (!actionCode.isEmpty()) {
@@ -1034,6 +1018,9 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     out << "        end\n";
     out << "        // USER HOOK: Update\n";
     out << "        hook_" << hookBaseName << "_update(id);\n";
+    if (entity.isPlayer) {
+      out << "        g_player_health = health;\n";
+    }
     out << "        frame;\n";
     out << "    end\n";
     break;
@@ -1141,7 +1128,8 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   }
   out << "end\n\n";
 
-  // Helper functions for NPC behavior (Safe from "Process 0 not active" errors)
+  // Helper functions for NPC behavior (Safe from "Process 0 not active"
+  // errors)
   out << "// Safe property access helpers\n";
   out << "function float get_val_x(int _id) begin if (exists(_id)) return "
          "_id.x; end return 0.0; end\n";
@@ -1150,10 +1138,12 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   out << "function float get_val_z(int _id) begin if (exists(_id)) return "
          "_id.z; end return 0.0; end\n\n";
 
-  out << "// Safe 3D Distance calculation (returns distance in editor units)\n";
+  out << "// Safe 3D Distance calculation (returns distance in editor "
+         "units)\n";
   out << "function float get_dist_3d(int id1, int id2)\n";
   out << "begin\n";
-  out << "    if (not exists(id1) or not exists(id2)) return 999999.0; end\n";
+  out << "    if (not exists(id1) or not exists(id2)) return 999999.0; "
+         "end\n";
   out << "    return sqrt(pow(get_val_x(id1)-get_val_x(id2),2) + "
          "pow(get_val_y(id1)-get_val_y(id2),2) + "
          "pow((get_val_z(id1)-get_val_z(id2))/16.0,2)) / 100.0;\n";
@@ -1162,8 +1152,10 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   // Helper function to follow a path - ALWAYS present to avoid undefined
   // procedure errors
   out << "// NPC Path Following Helper\n";
-  out << "function npc_follow_path(int path_id, int pointer current_wp, int "
-         "pointer wait_counter, int pointer direction, double pointer cur_x, "
+  out << "function npc_follow_path(int path_id, int pointer current_wp, "
+         "int "
+         "pointer wait_counter, int pointer direction, double pointer "
+         "cur_x, "
          "double pointer cur_y, double pointer cur_z, double pointer "
          "cur_angle, int snap_to_floor)\n";
   out << "private\n";
@@ -1225,12 +1217,14 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
   out << "    *cur_x = target_x; *cur_y = target_y;\n";
   out << "    if (wait_time > 0) *wait_counter = wait_time; end\n";
   out << "    switch (loop_mode)\n";
-  out << "      case 0: if (*current_wp < waypoint_count - 1) *current_wp = "
+  out << "      case 0: if (*current_wp < waypoint_count - 1) *current_wp "
+         "= "
          "*current_wp + 1; end; end\n";
   out << "      case 1: *current_wp = (*current_wp + 1) % waypoint_count; "
          "end\n";
   out << "      case 2: *current_wp = *current_wp + *direction;\n";
-  out << "              if (*current_wp >= waypoint_count - 1) *direction = "
+  out << "              if (*current_wp >= waypoint_count - 1) *direction "
+         "= "
          "-1; end\n";
   out << "              if (*current_wp <= 0) *direction = 1; end; end\n";
   out << "      case 3: *current_wp = rand(0, waypoint_count - 1); end\n";
@@ -1253,15 +1247,17 @@ ProcessGenerator::generateNPCPathsCode(const QVector<NPCPath> &npcPaths) {
          "magic value)\n";
   out << "        target_x = look_angle * 0.01745329; // Degrees to Radians\n";
   out << "    elseif (d_dist > 5.0)\n";
-  out << "        target_x = atan2(-dy, dx); // Negate Y to match engine "
-         "coordinate system\n";
+  out << "        // fget_angle returns millidegrees; negate Y for 3D coord "
+         "system, convert to radians\n";
+  out << "        target_x = -fget_angle(0, 0, dx * 1000.0, dy * 1000.0) / "
+         "57295.78;\n";
   out << "    else\n";
   out << "        target_x = *cur_angle;\n";
   out << "    end\n";
   out << "    \n";
   out << "    // Correct angular difference for smooth Lerp (handles 0-2PI "
          "wrap)\n";
-  out << "    target_y = target_x - *cur_angle; \n";
+  out << "    target_y = target_x - *cur_angle;\n";
   out << "    while (target_y > 3.14159) target_y = target_y - 6.28318; end\n";
   out << "    while (target_y < -3.14159) target_y = target_y + 6.28318; end\n";
   out << "    *cur_angle = *cur_angle + (target_y * 0.15); // Smooth turn (15% "
@@ -1319,7 +1315,8 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
 
               if (isPlayer) {
                 // Use pre-computed d_dist scaled for editor units
-                // (divide by 4 so user values like 60/500 map to real 240/2000)
+                // (divide by 4 so user values like 60/500 map to real
+                // 240/2000)
                 return "(d_dist / 4.0)";
               }
 
@@ -1341,6 +1338,12 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
             } else if (srcNode->type == "math_camera_angle") {
               return QString("RAY_GET_CAMERA_ANGLE(%1)")
                   .arg(resolve(srcNode->pins[0].pinId));
+            } else if (srcNode->type == "logic_key") {
+                QString keyName = resolve(srcNode->pins[0].pinId);
+                keyName.remove("\"");
+                if (keyName.startsWith("K_") || keyName.startsWith("_"))
+                    return "key(" + keyName + ")";
+                return "key(_" + keyName + ")";
             } else if (srcNode->type == "math_op" ||
                        srcNode->type == "logic_compare") {
               return QString("(%1 %2 %3)")
@@ -1353,6 +1356,14 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       }
 
       QString val = pin->value;
+      if (val.toLower() == "health")
+        return "health";
+      if (val.toLower() == "last_health")
+        return "last_health";
+      if (val.toLower() == "colliding")
+        return "colliding"; // BennuGD global variable for collision target
+      if (val.toLower() == "nearby_npc")
+        return "get_id(type campath)"; // Usually NPCs are on paths. We should probably use a better way later.
       if (!playerProcessName.isEmpty()) {
         QString lowerPlayerProc = playerProcessName.toLower();
         // Only replace if it doesn't already look like it's been resolved
@@ -1380,7 +1391,10 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
     QString ind = QString(indent, ' ');
 
     if (current->type == "action_say") {
-      out << ind << "say(" << res.resolve(current->pins[2].pinId) << ");\n";
+      QString msg = res.resolve(current->pins[2].pinId);
+      if (!msg.startsWith("\""))
+        msg = "\"" + msg + "\"";
+      out << ind << "say(" << msg << ");\n";
     } else if (current->type == "action_kill") {
       out << ind << "signal(" << res.resolve(current->pins[1].pinId)
           << ", s_kill);\n";
@@ -1397,23 +1411,163 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       out << ind << " music_stop();\n";
     } else if (current->type == "action_stop_sound") {
       out << ind << " sound_stop(0); // Stop all sounds\n";
+    } else if (current->type == "action_damage") {
+      QString damageVal = res.resolve(current->pins[2].pinId);
+      QString targetVal = res.resolve(current->pins[3].pinId);
+      
+      // Default to _npc_target for backward compatibility with NPCs
+      if (targetVal == "0" || targetVal == "TYPE_PLAYER") {
+          targetVal = "_npc_target";
+      }
+
+      // Pin 4 = Hit Frame
+      QString hitFrame = "0"; // Default to instant for graphs
+      if (current->pins.size() > 4) {
+        QString hf = res.resolve(current->pins[4].pinId);
+        // If empty, auto-calculate. If "0", it's instant.
+        if (hf.isEmpty()) {
+            hitFrame = "current_anim_end";
+        } else {
+            hitFrame = hf;
+        }
+      }
+
+      out << ind << " // Damage impact logic\n";
+      out << ind << " if (anim_current_frame >= " << hitFrame << " and attack_hit_timer == 0)\n";
+      out << ind << "     if (" << targetVal << " > 0) " << targetVal << ".health = " << targetVal << ".health - (" << damageVal << "); end\n";
+      out << ind << "     attack_hit_timer = 1; // Mark as hit\n";
+      out << ind << " end\n";
+      out << ind << " // Reset hit timer when animation loops or is reset\n";
+      out << ind << " if (anim_current_frame <= current_anim_start + 1)\n";
+      out << ind << "     attack_hit_timer = 0;\n";
+      out << ind << " end\n";
+    } else if (current->type == "action_die") {
+      QString startF = res.resolve(current->pins[2].pinId);
+      QString endF = res.resolve(current->pins[3].pinId);
+      QString billboard = res.resolve(current->pins[4].pinId);
+      out << ind << " current_anim_start = " << startF
+          << "; current_anim_end = " << endF << "; current_anim_speed = 10;\n";
+      out << ind << " anim_current_frame = " << startF
+          << "; anim_next_frame = " << startF << " + 1;\n";
+      out << ind << " fx_hit(world_x, world_y, world_z + 32);\n";
+    } else if (current->type == "action_set_health") {
+      QString hVal = res.resolve(current->pins[2].pinId);
+      QString target = res.resolve(current->pins[3].pinId);
+      if (target.toLower() == "self" || target == "0") {
+        out << ind << " health = " << hVal << ";\n";
+      } else {
+        out << ind << " _npc_target = " << target << ";\n";
+        out << ind << " _npc_target.health = " << hVal << ";\n";
+      }
+    } else if (current->type == "action_spawn_billboard") {
+      QString file = res.resolve(current->pins[2].pinId);
+      file.remove("\"");
+      QString gStart = res.resolve(current->pins[3].pinId);
+      QString gEnd = res.resolve(current->pins[4].pinId);
+      QString speed = res.resolve(current->pins[5].pinId);
+      QString scale = res.resolve(current->pins[6].pinId);
+      QString repeatMode = "0";
+      if (current->pins.size() > 7) {
+          repeatMode = res.resolve(current->pins[7].pinId);
+      }
+      
+      // Load the FPG file and spawn the billboard
+      out << ind << " s_id = fpg_load(get_asset_path(\"" << file << "\"));\n";
+      out << ind << " if (s_id > 0) Billboard_Effect_Process(world_x, world_y, world_z, s_id, " 
+          << gStart << ", " << gEnd << ", " << speed << ", " << scale << ", " << repeatMode << "); end\n";
     } else if (current->type == "action_npc_chase") {
-      QString target = res.resolve(current->pins[2].pinId);
       QString speed = res.resolve(current->pins[3].pinId);
-      out << ind << " if (exists(" << target << "))\n";
-      out << ind << "     _npc_ang = fget_angle(x, y, " << target << ".x, "
-          << target << ".y);\n";
-      out << ind << "     x += get_distx(_npc_ang, " << speed << ");\n";
-      out << ind << "     y += get_disty(_npc_ang, " << speed << ");\n";
+      // Guard: stop chasing when collision_detected (set by proximity block at end
+      // of previous frame). This avoids the is_attacking timing issue.
+      out << ind << " // Chase: move toward player while NOT in attack range and player is alive\n";
+      out << ind << " if (collision_detected == 0 and g_player_health > 0.0)\n";
+      out << ind << "     npc_path_active = 0;\n";
+      out << ind << "     if (d_dist > 5.0)\n";
+      out << ind
+          << "         world_angle = -fget_angle(0, 0, (g_player_x - "
+             "world_x)*1000.0, (g_player_y - world_y)*1000.0) / 57295.78;\n";
+      out << ind << "         world_x += ((g_player_x - world_x) / d_dist) * "
+          << speed << " * 3;\n";
+      out << ind << "         world_y += ((g_player_y - world_y) / d_dist) * "
+          << speed << " * 3;\n";
+      if (entity.snapToFloor)
+        out << ind
+            << "         world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
+      out << ind << "     end\n";
+      // Walk animation: only when not in attack range
+      out << ind << "     if (current_anim_start != 0)\n";
+      out << ind
+          << "         current_anim_start = 0; current_anim_end = 14; "
+             "current_anim_speed = 10;\n";
+      out << ind << "         anim_current_frame = 0; anim_next_frame = 1;\n";
+      out << ind << "         anim_interpolation = 0.0;\n";
+      out << ind << "     end\n";
+      out << ind << " end\n";
+    } else if (current->type == "action_npc_attack") {
+      // All-in-one attack node: proximity + animation + damage + cooldown
+      QString range    = res.resolve(current->pins[2].pinId);
+      QString damage   = res.resolve(current->pins[3].pinId);
+      QString cooldown = res.resolve(current->pins[4].pinId);
+      QString animStart= res.resolve(current->pins[5].pinId);
+      QString animEnd  = res.resolve(current->pins[6].pinId);
+      // Cooldown in frames (60fps), hit fires at half-period
+      QString cooldownFrames = QString("((int)((%1)*60.0))").arg(cooldown);
+      out << ind << " // ACTION_NPC_ATTACK: self-contained attack system\n";
+      out << ind << " if (d_dist < " << range << " and g_player_health > 0.0)\n";
+      out << ind << "     npc_path_active = 0;\n";
+      out << ind << "     world_angle = -fget_angle(0, 0, (g_player_x - world_x)*1000.0, (g_player_y - world_y)*1000.0) / 57295.78;\n";
+      out << ind << "     if (current_anim_start != " << animStart << " or current_anim_end != " << animEnd << ")\n";
+      out << ind << "         current_anim_start = " << animStart << "; current_anim_end = " << animEnd << "; current_anim_speed = 10;\n";
+      out << ind << "         anim_current_frame = " << animStart << "; anim_next_frame = " << animStart << " + 1;\n";
+      out << ind << "         anim_interpolation = 0.0;\n";
+      out << ind << "         is_attacking = 1;\n";
+      out << ind << "         attack_hit_timer = " << cooldownFrames << "; // Reset timer on state start\n";
+      out << ind << "     end\n";
+      out << ind << "     is_attacking = 1;\n";
+      out << ind << " else\n";
+      out << ind << "     // Player out of range or player dead: reset attack state\n";
+      out << ind << "     if (is_attacking == 1)\n";
+      out << ind << "         is_attacking = 0; attack_hit_timer = 0;\n";
+      out << ind << "         current_anim_start = 0; current_anim_end = 14; current_anim_speed = 10;\n";
+      out << ind << "         anim_current_frame = 0; anim_next_frame = 1; anim_interpolation = 0.0;\n";
+      out << ind << "     end\n";
+      out << ind << " end\n";
+      out << ind << " // Attack timing logic (only when player is alive)\n";
+      out << ind << " if (is_attacking == 1 and g_player_health > 0.0)\n";
+      out << ind << "     if (attack_hit_timer > 0)\n";
+      out << ind << "         attack_hit_timer = attack_hit_timer - 1;\n";
+      out << ind << "     else\n";
+      out << ind << "         attack_hit_timer = " << cooldownFrames << "; // Auto-repeat\n";
+      out << ind << "     end\n";
+      out << ind << "     // HIT FRAME: Fires when timer reaches half-way\n";
+      out << ind << "     if (attack_hit_timer == (" << cooldownFrames << " / 2))\n";
+      out << ind << "         _npc_target = get_id(type " << playerTypeName << ");\n";
+      out << ind << "         if (_npc_target > 0) _npc_target.health = _npc_target.health - ( " << damage << " ); end\n";
+      out << ind << "     end\n";
+      out << ind << " else\n";
+      out << ind << "     // Player dead: force reset attack state\n";
+      out << ind << "     if (is_attacking == 1 and g_player_health <= 0.0)\n";
+      out << ind << "         is_attacking = 0; attack_hit_timer = 0;\n";
+      out << ind << "         current_anim_start = 0; current_anim_end = 14; current_anim_speed = 10;\n";
+      out << ind << "         anim_current_frame = 0; anim_next_frame = 1; anim_interpolation = 0.0;\n";
+      out << ind << "     end\n";
       out << ind << " end\n";
     } else if (current->type == "action_npc_flee") {
-      QString target = res.resolve(current->pins[2].pinId);
       QString speed = res.resolve(current->pins[3].pinId);
-      out << ind << " if (exists(" << target << "))\n";
-      out << ind << "     _npc_ang = fget_angle(x, y, " << target << ".x, "
-          << target << ".y) + 180000;\n";
-      out << ind << "     x += get_distx(_npc_ang, " << speed << ");\n";
-      out << ind << "     y += get_disty(_npc_ang, " << speed << ");\n";
+      out << ind
+          << " // Flee: move away from player using 3D world coordinates\n";
+      out << ind << " npc_path_active = 0;\n";
+      out << ind << " if (d_dist > 5.0)\n";
+      out << ind
+          << "     world_angle = -fget_angle(0, 0, (world_x - "
+             "g_player_x)*1000.0, (world_y - g_player_y)*1000.0) / 57295.78;\n";
+      out << ind << "     world_x += ((world_x - g_player_x) / d_dist) * "
+          << speed << " * 3;\n";
+      out << ind << "     world_y += ((world_y - g_player_y) / d_dist) * "
+          << speed << " * 3;\n";
+      if (entity.snapToFloor)
+        out << ind
+            << "     world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
       out << ind << " end\n";
     } else if (current->type == "action_sound") {
       QString file = res.resolve(current->pins[2].pinId);
@@ -1431,49 +1585,60 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       // Stop path and face player during animation (e.g. attack)
       out << ind << " npc_path_active = 0;\n";
       out << ind
-          << " world_angle = atan2(g_player_y - world_y, "
-             "g_player_x - world_x) / 57295.78;\n";
+          << " world_angle = -fget_angle(0, 0, (g_player_x - world_x)*1000.0, "
+             "(g_player_y - world_y)*1000.0) / 57295.78;\n";
       out << ind << " if (current_anim_start != " << gStart
           << " or current_anim_end != " << gEnd << ")\n";
       out << ind << "     current_anim_start = " << gStart
           << "; current_anim_end = " << gEnd
           << "; current_anim_speed = " << speed << ";\n";
       out << ind
-          << "     anim_current_frame = current_anim_start; anim_next_frame = "
+          << "     anim_current_frame = current_anim_start; "
+             "anim_next_frame "
+             "= "
              "current_anim_start + 1;\n";
       out << ind
-          << "     if (anim_next_frame > current_anim_end) anim_next_frame = "
+          << "     if (anim_next_frame > current_anim_end) anim_next_frame "
+             "= "
              "current_anim_start; end\n";
       out << ind << "     anim_interpolation = 0.0;\n";
       out << ind << " end\n";
-    } else if (current->type == "action_npc_chase") {
-      QString chaseSpeed = res.resolve(current->pins[3].pinId);
-      out << ind << " // Chase: use global player position\n";
-      out << ind << " npc_path_active = 0;\n";
-      out << ind << " if (d_dist > 5.0)\n";
-      out << ind
-          << "     world_angle = atan2(g_player_y - world_y, "
-             "g_player_x - world_x) / 57295.78;\n";
-      out << ind << "     world_x += ((g_player_x - world_x) / d_dist) * "
-          << chaseSpeed << " * 3;\n";
-      out << ind << "     world_y += ((g_player_y - world_y) / d_dist) * "
-          << chaseSpeed << " * 3;\n";
-      if (entity.snapToFloor)
-        out << ind
-            << "     world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
-      out << ind << " end\n";
-      // Set walk animation during chase
-      out << ind << " if (current_anim_start != 0)\n";
-      out << ind
-          << "     current_anim_start = 0; current_anim_end = 14; "
-             "current_anim_speed = 10;\n";
-      out << ind << "     anim_current_frame = 0; anim_next_frame = 1;\n";
-      out << ind << "     anim_interpolation = 0.0;\n";
-      out << ind << " end\n";
+
+      // Following the flow to successor nodes (like action_damage)
+      const NodePinData *outPin = nullptr;
+      for (const auto &p : current->pins) {
+        if (!p.isInput && p.isExecution && p.name == "Out") {
+          outPin = &p;
+          break;
+        }
+      }
+      if (outPin && !outPin->linkedPinIds.isEmpty()) {
+        const NodePinData *next =
+            pinMap.value(outPin->linkedPinIds.first(), nullptr);
+        generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
+                     indent, visited);
+      }
     } else if (current->type == "action_wait") {
       QString secs = res.resolve(current->pins[2].pinId);
-      out << ind << " behavior_timer = (" << secs << ") * 60;\n";
-      out << ind << " while(behavior_timer > 0) behavior_timer--; frame; end\n";
+      // behavior_timer is decremented each frame at the top of the entity loop.
+      // We wrap successors so they only execute when the timer is 0.
+      out << ind << " if (behavior_timer <= 0)\n";
+      out << ind << "     behavior_timer = (" << secs << ") * 60;\n";
+
+      const NodePinData *outPin = nullptr;
+      for (const auto &p : current->pins) {
+        if (!p.isInput && p.isExecution) {
+          outPin = &p;
+          break;
+        }
+      }
+      if (outPin && !outPin->linkedPinIds.isEmpty()) {
+        const NodePinData *next =
+            pinMap.value(outPin->linkedPinIds.first(), nullptr);
+        generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
+                     indent + 4, visited);
+      }
+      out << ind << " end\n";
     } else if (current->type == "action_music") {
       QString file = res.resolve(current->pins[2].pinId);
       file.remove("\"");

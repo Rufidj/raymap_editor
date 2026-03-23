@@ -101,10 +101,30 @@ void BehaviorPinItem::mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event) {
         ok = true;
       }
     } else {
-      text = QInputDialog::getText(
-          nullptr, QObject::tr("Editar Valor"),
-          QObject::tr("Introduce el valor para %1:").arg(m_data->name),
-          QLineEdit::Normal, m_data->value, &ok);
+      // List of common variables for quick selection
+      QStringList commonVars;
+      commonVars << "10" << "25" << "50" << "100" 
+                 << "health" << "move_speed" << "collision_detected" 
+                 << "_npc_target" << "world_x" << "world_y" << "world_z"
+                 << "g_player_x" << "g_player_y" << "g_player_health" 
+                 << "id" << "TYPE_PLAYER" << "TYPE_ENEMY";
+
+      bool showList = (m_data->name == "Damage" || m_data->name == "Value" || 
+                       m_data->name == "A" || m_data->name == "B" || 
+                       m_data->name == "Var" || m_data->name == "Cond" ||
+                       m_data->name == "Target");
+
+      if (showList) {
+          text = QInputDialog::getItem(
+              nullptr, QObject::tr("Seleccionar Variable o Valor"),
+              QObject::tr("Elige un valor para %1 (o escribe uno nuevo):").arg(m_data->name),
+              commonVars, commonVars.indexOf(m_data->value), true, &ok);
+      } else {
+          text = QInputDialog::getText(
+              nullptr, QObject::tr("Editar Valor"),
+              QObject::tr("Introduce el valor para %1:").arg(m_data->name),
+              QLineEdit::Normal, m_data->value, &ok);
+      }
     }
 
     if (ok) {
@@ -297,9 +317,12 @@ void BehaviorNodeScene::deleteNode(BehaviorNodeItem *item) {
 
   NodeData *data = item->data();
 
-  // 2. Remove from graph data
+  // 2. Remove from graph data and clear dangling links
   for (int i = 0; i < m_graph.nodes.size(); ++i) {
     if (m_graph.nodes[i].nodeId == data->nodeId) {
+      for (const NodePinData &pin : m_graph.nodes[i].pins) {
+        removePinLinks(pin.pinId);
+      }
       m_graph.nodes.removeAt(i);
       break;
     }
@@ -1172,6 +1195,110 @@ void BehaviorNodeScene::addNode(const QString &type, const QPointF &pos) {
     data.pins.append(pCooldown);
     data.pins.append(pAnimStart);
     data.pins.append(pAnimEnd);
+  } else if (type == "ai_melee_director") {
+    NodePinData pIn, pOut, pVisionRange, pChaseSpeed, pAttackRange, pDamage, pAnimStart, pAnimEnd;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In (Update)";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    
+    pVisionRange.pinId = m_graph.nextPinId++;
+    pVisionRange.name = "Rango Visión";
+    pVisionRange.isInput = true;
+    pVisionRange.value = "400";
+    
+    pChaseSpeed.pinId = m_graph.nextPinId++;
+    pChaseSpeed.name = "Velocidad";
+    pChaseSpeed.isInput = true;
+    pChaseSpeed.value = "3";
+    
+    pAttackRange.pinId = m_graph.nextPinId++;
+    pAttackRange.name = "Rango Ataque";
+    pAttackRange.isInput = true;
+    pAttackRange.value = "60";
+    
+    pDamage.pinId = m_graph.nextPinId++;
+    pDamage.name = "Daño";
+    pDamage.isInput = true;
+    pDamage.value = "25";
+    
+    pAnimStart.pinId = m_graph.nextPinId++;
+    pAnimStart.name = "Anim Ataque Inicio";
+    pAnimStart.isInput = true;
+    pAnimStart.value = "15";
+    
+    pAnimEnd.pinId = m_graph.nextPinId++;
+    pAnimEnd.name = "Anim Ataque Fin";
+    pAnimEnd.isInput = true;
+    pAnimEnd.value = "77";
+    
+    NodePinData pAnimHit;
+    pAnimHit.pinId = m_graph.nextPinId++;
+    pAnimHit.name = "Anim Hit (Golpe)";
+    pAnimHit.isInput = true;
+    pAnimHit.value = "45"; // Default midway
+    
+    NodePinData pCooldown;
+    pCooldown.pinId = m_graph.nextPinId++;
+    pCooldown.name = "Cooldown (s)";
+    pCooldown.isInput = true;
+    pCooldown.value = "1.5";
+
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pVisionRange);
+    data.pins.append(pChaseSpeed);
+    data.pins.append(pAttackRange);
+    data.pins.append(pDamage);
+    data.pins.append(pAnimStart);
+    data.pins.append(pAnimEnd);
+    data.pins.append(pAnimHit);
+    data.pins.append(pCooldown);
+  } else if (type == "ai_damage_director") {
+    NodePinData pIn, pOut, pPainStart, pPainEnd, pDeathStart, pDeathEnd, pSpeed;
+    pIn.pinId = m_graph.nextPinId++;
+    pIn.name = "In (Damage)";
+    pIn.isInput = true;
+    pIn.isExecution = true;
+    pOut.pinId = m_graph.nextPinId++;
+    pOut.name = "Out";
+    pOut.isInput = false;
+    pOut.isExecution = true;
+    
+    pPainStart.pinId = m_graph.nextPinId++;
+    pPainStart.name = "Anim Daño Inicio";
+    pPainStart.isInput = true;
+    pPainStart.value = "78"; // Generic pain
+    pPainEnd.pinId = m_graph.nextPinId++;
+    pPainEnd.name = "Anim Daño Fin";
+    pPainEnd.isInput = true;
+    pPainEnd.value = "100";
+    
+    pDeathStart.pinId = m_graph.nextPinId++;
+    pDeathStart.name = "Anim Muerte Inicio";
+    pDeathStart.isInput = true;
+    pDeathStart.value = "80"; // Generic death
+    pDeathEnd.pinId = m_graph.nextPinId++;
+    pDeathEnd.name = "Anim Muerte Fin";
+    pDeathEnd.isInput = true;
+    pDeathEnd.value = "148";
+    
+    pSpeed.pinId = m_graph.nextPinId++;
+    pSpeed.name = "Velocidad Animación";
+    pSpeed.isInput = true;
+    pSpeed.value = "20";
+
+    data.pins.append(pIn);
+    data.pins.append(pOut);
+    data.pins.append(pPainStart);
+    data.pins.append(pPainEnd);
+    data.pins.append(pDeathStart);
+    data.pins.append(pDeathEnd);
+    data.pins.append(pSpeed);
   } else if (type == "action_set_alpha") {
     NodePinData pIn, pOut, pAlpha;
     pIn.pinId = m_graph.nextPinId++;
@@ -1479,6 +1606,12 @@ void BehaviorNodeScene::contextMenuEvent(
   });
   actions->addAction("Atacar Objetivo (NPC)", [this, event]() {
     addNode("action_npc_attack", event->scenePos());
+  });
+  actions->addAction("Director IA (Melee)", [this, event]() {
+    addNode("ai_melee_director", event->scenePos());
+  });
+  actions->addAction("Director Daño/Muerte", [this, event]() {
+    addNode("ai_damage_director", event->scenePos());
   });
 
   QMenu *logic = menu.addMenu("Lógica");

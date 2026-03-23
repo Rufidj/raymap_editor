@@ -824,59 +824,41 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
     }
     out << "    g_last_frame_ms = get_timer();\n";
     out << "    loop\n";
-        out << "        // --- 1. CORE STATE: DEATH & DAMAGE (UNIFIED) ---\n";
-        out << "        if (is_dead == 0 and health <= 0.0)\n";
-        out << "            is_dead = 1;\n";
-        out << "            npc_path_active = 0;\n";
-        if (!deathCode.isEmpty()) {
-            out << "            " << deathCode.replace("\n", "\n            ") << "\n";
+        out << "        // --- GLOBAL UPDATE SYNC ---\n";
+        out << "        x = world_x; y = world_y; z = world_z;\n";
+        out << "        if (is_dead == 0)\n";
+        if (entity.isPlayer) {
+            out << "            g_player_x = world_x; g_player_y = world_y; g_player_z = world_z; g_player_health = health;\n";
         } else {
-            out << "            fx_hit(world_x, world_y, world_z + 32);\n";
-        }
-        if (entity.isPlayer && !playerDeathCode.isEmpty()) {
-            out << "            " << playerDeathCode.replace("\n", "\n            ") << "\n";
+            out << "            dx = world_x - g_player_x; dy = world_y - g_player_y; d_dist = sqrt(dx*dx + dy*dy);\n";
         }
         out << "        end\n\n";
+        out << "        // Nodes found in graph: " << entity.behaviorGraph.nodes.size() << "\n";
 
-        out << "        if (health < last_health)\n";
-        out << "            recovery_timer = 12;\n";
-            out << "            if (health <= 0.0)\n";
-            QString onDeathGen = ProcessGenerator::generateGraphCode(entity, entity.behaviorGraph, "event_death", playerTypeName);
-            if (!onDeathGen.isEmpty()) {
-                out << "                " << onDeathGen.replace("\n", "\n                ") << "\n";
-            }
-            out << "            end\n";
-            out << "            is_dead = 1; npc_path_active = 0; collision_detected = 0;\n";
-            out << "            // Force death animation if none set\n";
-            out << "            if (current_anim_start == 0) current_anim_start = 78; current_anim_end = 148; end\n";
-        QString onDamageGen = ProcessGenerator::generateGraphCode(entity, entity.behaviorGraph, "event_damage", playerTypeName);
-        if (!onDamageGen.isEmpty()) {
-            out << "            " << onDamageGen.replace("\n", "\n            ") << "\n";
-        }
-        out << "        end\n";
-        out << "        last_health = health;\n";
-        out << "        if (recovery_timer > 0) recovery_timer--; end\n\n";
-
-        // --- 2. GLOBAL COLLISION DETECTION (Bi-directional) ---
+        // --- 1. COLLISION SCAN (Always active) ---\n";
         out << "        s_idx = RAY_CHECK_SPRITE_COLLISION(sprite_id, world_x, world_y, " << (entity.width / 1.5f) << ");\n";
         out << "        if (s_idx >= 0)\n";
         out << "            _npc_target = RAY_GET_SPRITE_ID(s_idx);\n";
         out << "            if (_npc_target > 0)\n";
-        out << "                collision_detected = 1;\n";
-        out << "                _npc_target.collision_detected = 1; // Alert the other one\n";
-        out << "                _npc_target._npc_target = sprite_id; // Set myself as its target\n";
-        if (entity.controlType == EntityInstance::CONTROL_CAR) {
-            out << "                if (move_speed > 2.0) _npc_target.health = _npc_target.health - (move_speed * 10.0); end\n";
-        }
-        out << "            end\n";
+        out << "                _npc_target.collision_detected = 1; // Bidirectional alert\n";
+        out << "                _npc_target._npc_target = sprite_id;\n";
+        out << "                if (colliding == 0)\n";
+        out << "                    collision_detected = 1;\n";
         if (!collisionCode.isEmpty()) {
-            out << "            " << collisionCode.replace("\n", "\n            ") << "\n";
+            out << "                    " << collisionCode.replace("\n", "\n                    ") << "\n";
         }
+        out << "                end\n";
+        out << "            end\n";
+        out << "            colliding = 1;\n";
         out << "        else\n";
         out << "            collision_detected = 0;\n";
-        out << "        end\n";
+        out << "            colliding = 0;\n";
+        out << "        end\n\n";
 
-        // --- 3. INPUTS / AI / PATHS ---
+        // --- 2. BEHAVIOR GRAPH LOGIC ---\n";
+        // (Nodes like ACTION_DAMAGE or ACTION_NPC_CHASE are generated here)\n";
+
+        // --- 3. INPUTS / AI / PATHS ---\n";
         out << "        if (is_dead == 0)\n";
         if (entity.isPlayer) {
             switch (entity.controlType) {
@@ -907,43 +889,12 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
                     }
                     break;
             }
-            out << "        g_player_x = world_x; g_player_y = world_y; g_player_z = world_z; g_player_health = health;\n";
         } else {
             // NPC AI / PATHS / OTHERS
             out << "        dx = world_x - g_player_x; dy = world_y - g_player_y; d_dist = sqrt(dx*dx + dy*dy);\n";
             if (entity.npcPathId >= 0) {
                 out << "        if (npc_path_active == 1)\n";
                 out << "            npc_follow_path(" << entity.npcPathId << ", &npc_current_waypoint, &npc_wait_counter, &npc_direction, &world_x, &world_y, &world_z, &world_angle, " << (entity.snapToFloor ? "1" : "0") << ");\n";
-                out << "        end\n";
-            }
-            if (hasChase || hasDamage) {
-                out << "        if (is_dead == 0 and g_player_health > 0.0 and recovery_timer == 0)\n";
-                int touchDist = entity.width > 0 ? entity.width * 2 : 80;
-                if (hasDamage) {
-                    out << "            if (d_dist < " << touchDist << ")\n";
-                    out << "                collision_detected = 1; npc_path_active = 0;\n";
-                    out << "                world_angle = -fget_angle(0, 0, (g_player_x - world_x)*1000.0, (g_player_y - world_y)*1000.0) / 57295.78;\n";
-                    QString hf2 = hitFrame.isEmpty() ? "current_anim_start + 5" : hitFrame;
-                    out << "                if (anim_current_frame >= " << hf2 << " and attack_hit_timer == 0)\n";
-                    out << "                    _npc_target = get_id(type " << playerTypeName << ");\n";
-                    out << "                    if (_npc_target > 0) _npc_target.health -= " << damageAmount << "; end\n";
-                    out << "                    attack_hit_timer = 1;\n";
-                    out << "                end\n";
-                    out << "                if (anim_current_frame <= current_anim_start + 2) attack_hit_timer = 0; end\n";
-                    out << "            else\n";
-                }
-                if (hasChase) {
-                    out << "                if (d_dist < " << (chaseRange * 4) << ")\n";
-                    out << "                    collision_detected = 0; npc_path_active = 0;\n";
-                    out << "                    world_angle = -fget_angle(0, 0, (g_player_x - world_x)*1000.0, (g_player_y - world_y)*1000.0) / 57295.78;\n";
-                    out << "                    world_x += ((g_player_x - world_x) / d_dist) * " << chaseSpeed << " * 180 * g_delta_time;\n";
-                    out << "                    world_y += ((g_player_y - world_y) / d_dist) * " << chaseSpeed << " * 180 * g_delta_time;\n";
-                    out << "                    if (current_anim_start != 0) current_anim_start = 0; current_anim_end = 14; current_anim_speed = 10; anim_current_frame = 0; anim_next_frame = 1; end\n";
-                    out << "                else\n";
-                    out << "                    collision_detected = 0; if (npc_path_active == 0) npc_path_active = 1; end\n";
-                    out << "                end\n";
-                }
-                if (hasDamage) out << "            end\n";
                 out << "        end\n";
             }
         }
@@ -957,12 +908,49 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
             out << "        world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
         }
 
-        // --- 4. GENERIC UPDATE LOGIC ---
+        // --- 4. GENERIC UPDATE LOGIC ---\n";
         if (!updateCode.isEmpty()) {
-            out << "        " << updateCode.replace("\n", "\n        ") << "\n";
+            out << "        if (is_dead == 0)\n";
+            out << "            " << updateCode.replace("\n", "\n            ") << "\n";
+            out << "        end\n";
         }
 
-        // --- 5. VISUAL SYNC & CAMERA ---
+        // --- 5. CORE STATE: DEATH & DAMAGE (UNIFIED) ---\n";
+        out << "        if (is_dead == 0 and health <= 0.0)\n";
+        out << "            is_dead = 1;\n";
+        out << "            npc_path_active = 0;\n";
+        if (!deathCode.isEmpty()) {
+            out << "            " << deathCode.replace("\n", "\n            ") << "\n";
+        } else {
+            out << "            fx_hit(world_x, world_y, world_z + 32);\n";
+        }
+        if (entity.isPlayer && !playerDeathCode.isEmpty()) {
+            out << "            " << playerDeathCode.replace("\n", "\n            ") << "\n";
+        }
+        out << "        end\n\n";
+
+        out << "        if (health < last_health)\n";
+        out << "            recovery_timer = 12;\n";
+        out << "            if (health <= 0.0)\n";
+        {
+            QString onDeathGenInner = ProcessGenerator::generateGraphCode(entity, entity.behaviorGraph, "event_death", playerTypeName);
+            if (!onDeathGenInner.isEmpty()) {
+                out << "                " << onDeathGenInner.replace("\n", "\n                ") << "\n";
+            }
+        }
+        out << "                is_dead = 1; npc_path_active = 0; collision_detected = 0;\n";
+        out << "                // Force death animation if none set\n";
+        out << "                if (current_anim_start == 0) current_anim_start = 78; current_anim_end = 148; end\n";
+        out << "            end\n";
+        QString onDamageGen = ProcessGenerator::generateGraphCode(entity, entity.behaviorGraph, "event_damage", playerTypeName);
+        if (!onDamageGen.isEmpty()) {
+            out << "            " << onDamageGen.replace("\n", "\n            ") << "\n";
+        }
+        out << "        end\n";
+        out << "        last_health = health;\n";
+        out << "        if (recovery_timer > 0) recovery_timer--; end\n\n";
+
+        // --- 6. VISUAL SYNC & CAMERA ---\n";
         if (entity.type == "model" || entity.type == "gltf") {
             if (entity.isPlayer || entity.controlType == EntityInstance::CONTROL_CAR) {
                 out << "        world_angle = player_angle + (turn_offset * 0.005);\n";
@@ -978,8 +966,24 @@ QString ProcessGenerator::generateProcessCodeWithBehavior(
             out << "        if (current_anim_speed != 0)\n";
             out << "            anim_interpolation += abs(current_anim_speed) * g_delta_time;\n";
             out << "            if (anim_interpolation >= 1.0)\n";
-            out << "                anim_interpolation = 0.0; anim_current_frame = anim_next_frame; anim_next_frame++;\n";
-            out << "                if (anim_next_frame > current_anim_end) anim_next_frame = current_anim_start; end\n";
+            out << "                anim_interpolation = 0.0;\n";
+            out << "                if (is_dead == 0 or anim_current_frame < current_anim_end)\n";
+            out << "                    anim_current_frame = anim_next_frame;\n";
+            out << "                    anim_next_frame++;\n";
+            out << "                    if (anim_next_frame > current_anim_end)\n";
+            out << "                        if (is_dead == 1)\n";
+            out << "                            anim_current_frame = current_anim_end;\n";
+            out << "                            anim_next_frame = current_anim_end;\n";
+            out << "                            anim_interpolation = 1.0;\n";
+            out << "                        else\n";
+            out << "                            anim_next_frame = current_anim_start;\n";
+            out << "                        end\n";
+            out << "                    end\n";
+            out << "                else\n";
+            out << "                    anim_current_frame = current_anim_end;\n";
+            out << "                    anim_next_frame = current_anim_end;\n";
+            out << "                    anim_interpolation = 1.0;\n";
+            out << "                end\n";
             out << "            end\n";
             out << "        end\n";
             if (entity.type == "model") {
@@ -1298,8 +1302,11 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
         return "0";
 
       if (!pin->linkedPinIds.isEmpty()) {
-        const NodePinData *linkedPin =
-            pm.value(pin->linkedPinIds.first(), nullptr);
+        const NodePinData *linkedPin = nullptr;
+        for (int lid : pin->linkedPinIds) {
+            linkedPin = pm.value(lid, nullptr);
+            if (linkedPin) break;
+        }
         if (linkedPin) {
           const NodeData *srcNode = ptnm.value(linkedPin->pinId, nullptr);
           if (srcNode) {
@@ -1323,6 +1330,35 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
               if (target == "TYPE_PLAYER" && !playerProcessName.isEmpty())
                 target = "get_id(type " + playerProcessName + ")";
               return QString("get_dist_3d(id, %1)").arg(target);
+            } else if (srcNode->type == "logic_compare") {
+              QString a = resolve(srcNode->pins[0].pinId);
+              QString b = resolve(srcNode->pins[1].pinId);
+              QString op = srcNode->pins[2].value;
+              if (op == "Greater") return QString("(%1 > %2)").arg(a, b);
+              if (op == "Greater Equal") return QString("(%1 >= %2)").arg(a, b);
+              if (op == "Less") return QString("(%1 < %2)").arg(a, b);
+              if (op == "Less Equal") return QString("(%1 <= %2)").arg(a, b);
+              if (op == "Equal") return QString("(%1 == %2)").arg(a, b);
+              if (op == "Not Equal") return QString("(%1 != %2)").arg(a, b);
+              return QString("(%1 < %2)").arg(a, b); // Default
+            } else if (srcNode->type == "logic_and") {
+              return QString("(%1 AND %2)").arg(resolve(srcNode->pins[0].pinId), resolve(srcNode->pins[1].pinId));
+            } else if (srcNode->type == "logic_or") {
+              return QString("(%1 OR %2)").arg(resolve(srcNode->pins[0].pinId), resolve(srcNode->pins[1].pinId));
+            } else if (srcNode->type == "logic_not") {
+              return QString("(NOT %1)").arg(resolve(srcNode->pins[0].pinId));
+            } else if (srcNode->type == "math_add") {
+              return QString("(%1 + %2)").arg(resolve(srcNode->pins[0].pinId), resolve(srcNode->pins[1].pinId));
+            } else if (srcNode->type == "math_sub") {
+              return QString("(%1 - %2)").arg(resolve(srcNode->pins[0].pinId), resolve(srcNode->pins[1].pinId));
+            } else if (srcNode->type == "math_mul") {
+              return QString("(%1 * %2)").arg(resolve(srcNode->pins[0].pinId), resolve(srcNode->pins[1].pinId));
+            } else if (srcNode->type == "math_div") {
+              return QString("(%1 / %2)").arg(resolve(srcNode->pins[0].pinId), resolve(srcNode->pins[1].pinId));
+            } else if (srcNode->type == "math_random") {
+                QString min = resolve(srcNode->pins[0].pinId);
+                QString max = resolve(srcNode->pins[1].pinId);
+                return QString("rand(%1, %2)").arg(min, max);
             } else if (srcNode->type == "math_point_dist") {
               return QString("RAY_GET_POINT_DIST(%1, %2, %3, %4, %5, %6)")
                   .arg(resolve(srcNode->pins[0].pinId))
@@ -1385,10 +1421,17 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
 
   std::function<void(const NodeData *, int, QSet<int> &)> generateFlow;
   generateFlow = [&](const NodeData *current, int indent, QSet<int> &visited) {
-    if (!current || visited.contains(current->nodeId))
+    if (!current) {
+        QString ind = QString(indent, ' ');
+        out << ind << "// generateFlow null pointer hit!\n";
+        return;
+    }
+    QString ind = QString(indent, ' ');
+    out << ind << "// generateFlow visiting: " << current->type << "\n";
+    if (visited.contains(current->nodeId))
       return;
     visited.insert(current->nodeId);
-    QString ind = QString(indent, ' ');
+
 
     if (current->type == "action_say") {
       QString msg = res.resolve(current->pins[2].pinId);
@@ -1412,14 +1455,18 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
     } else if (current->type == "action_stop_sound") {
       out << ind << " sound_stop(0); // Stop all sounds\n";
     } else if (current->type == "action_damage") {
-      QString damageVal = res.resolve(current->pins[2].pinId);
+      QString dmgNodeVal = res.resolve(current->pins[2].pinId);
       QString targetVal = res.resolve(current->pins[3].pinId);
-      
-      // Default to _npc_target for backward compatibility with NPCs
-      if (targetVal == "0" || targetVal == "TYPE_PLAYER") {
+
+      if (targetVal.isEmpty() || targetVal == "0" || targetVal == "TYPE_PLAYER") {
           targetVal = "_npc_target";
       }
 
+      if (dmgNodeVal.isEmpty()) dmgNodeVal = "10.0";
+      
+      // If it's a numeric constant, keep it as is. If it's a string, we wrap it?
+      // Actually, BennuGD accepts both if the string matches a variable name like 'move_speed'.
+      
       // Pin 4 = Hit Frame
       QString hitFrame = "0"; // Default to instant for graphs
       if (current->pins.size() > 4) {
@@ -1434,8 +1481,10 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
 
       out << ind << " // Damage impact logic\n";
       out << ind << " if (anim_current_frame >= " << hitFrame << " and attack_hit_timer == 0)\n";
-      out << ind << "     if (" << targetVal << " > 0) " << targetVal << ".health = " << targetVal << ".health - (" << damageVal << "); end\n";
-      out << ind << "     attack_hit_timer = 1; // Mark as hit\n";
+      out << ind << "    if (" << targetVal << " > 0)\n";
+      out << ind << "        " << targetVal << ".health = " << targetVal << ".health - (" << dmgNodeVal << ");\n";
+      out << ind << "        attack_hit_timer = 30;\n";
+      out << ind << "    end\n";
       out << ind << " end\n";
       out << ind << " // Reset hit timer when animation loops or is reset\n";
       out << ind << " if (anim_current_frame <= current_anim_start + 1)\n";
@@ -1477,25 +1526,25 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
           << gStart << ", " << gEnd << ", " << speed << ", " << scale << ", " << repeatMode << "); end\n";
     } else if (current->type == "action_npc_chase") {
       QString speed = res.resolve(current->pins[3].pinId);
-      // Guard: stop chasing when collision_detected (set by proximity block at end
-      // of previous frame). This avoids the is_attacking timing issue.
-      out << ind << " // Chase: move toward player while NOT in attack range and player is alive\n";
-      out << ind << " if (collision_detected == 0 and g_player_health > 0.0)\n";
-      out << ind << "     npc_path_active = 0;\n";
+      out << ind << " // Chase: move toward player while player is alive\n";
+      out << ind << " npc_path_active = 0;\n";
+      out << ind << " if (g_player_health > 0.0)\n";
       out << ind << "     if (d_dist > 5.0)\n";
       out << ind
           << "         world_angle = -fget_angle(0, 0, (g_player_x - "
              "world_x)*1000.0, (g_player_y - world_y)*1000.0) / 57295.78;\n";
-      out << ind << "         world_x += ((g_player_x - world_x) / d_dist) * "
+      out << ind << "         if (collision_detected == 0)\n";
+      out << ind << "             world_x += ((g_player_x - world_x) / d_dist) * "
           << speed << " * 3;\n";
-      out << ind << "         world_y += ((g_player_y - world_y) / d_dist) * "
+      out << ind << "             world_y += ((g_player_y - world_y) / d_dist) * "
           << speed << " * 3;\n";
       if (entity.snapToFloor)
         out << ind
-            << "         world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
+            << "             world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
+      out << ind << "         end\n";
       out << ind << "     end\n";
-      // Walk animation: only when not in attack range
-      out << ind << "     if (current_anim_start != 0)\n";
+      // Walk animation: only when not in attack range/collision
+      out << ind << "     if (current_anim_start != 0 and collision_detected == 0)\n";
       out << ind
           << "         current_anim_start = 0; current_anim_end = 14; "
              "current_anim_speed = 10;\n";
@@ -1552,6 +1601,92 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       out << ind << "         anim_current_frame = 0; anim_next_frame = 1; anim_interpolation = 0.0;\n";
       out << ind << "     end\n";
       out << ind << " end\n";
+    } else if (current->type == "ai_melee_director") {
+      QString visionRange = res.resolve(current->pins[2].pinId);
+      QString speed       = res.resolve(current->pins[3].pinId);
+      QString attackRange = res.resolve(current->pins[4].pinId);
+      QString damage      = res.resolve(current->pins[5].pinId);
+      QString animStart   = res.resolve(current->pins[6].pinId);
+      QString animEnd     = res.resolve(current->pins[7].pinId);
+      QString animHit     = res.resolve(current->pins[8].pinId);
+      QString cooldown    = res.resolve(current->pins[9].pinId);
+      QString cooldownFrames = QString("((int)((%1)*60.0))").arg(cooldown);
+
+      out << ind << " // --- AI MELEE DIRECTOR ---\n";
+      out << ind << " if (g_player_health > 0.0 and recovery_timer == 0)\n";
+      out << ind << "     if (d_dist < (" << attackRange << " * 2.2))\n";
+      out << ind << "         // ESTADO: ATACAR\n";
+      out << ind << "         npc_path_active = 0;\n";
+      out << ind << "         world_angle = -fget_angle(0, 0, (g_player_x - world_x)*1000.0, (g_player_y - world_y)*1000.0) / 57295.78;\n";
+      out << ind << "         if (current_anim_start != " << animStart << " or current_anim_end != " << animEnd << ")\n";
+      out << ind << "             current_anim_start = " << animStart << "; current_anim_end = " << animEnd << "; current_anim_speed = 10;\n";
+      out << ind << "             anim_current_frame = " << animStart << "; anim_next_frame = " << animStart << " + 1; anim_interpolation = 0.0;\n";
+      out << ind << "         end\n";
+      out << ind << "         // Aplicar Daño en exactamente el frame especificado\n";
+      out << ind << "         if (anim_current_frame == (" << animHit << ") and attack_hit_timer == 0)\n";
+      out << ind << "             _npc_target = get_id(type " << playerTypeName << ");\n";
+      out << ind << "             if (_npc_target > 0 and d_dist <= (" << attackRange << " * 2.5))\n";
+      out << ind << "                 _npc_target.health = _npc_target.health - ( " << damage << " );\n";
+      out << ind << "             end\n";
+      out << ind << "             attack_hit_timer = " << cooldownFrames << ";\n";
+      out << ind << "         end\n";
+      out << ind << "         if (attack_hit_timer > 0) attack_hit_timer = attack_hit_timer - 1; end\n";
+      out << ind << "         // Reset timer si la animacion reinicia el ciclo (vuelve a empezar)\n";
+      out << ind << "         if (anim_current_frame <= " << animStart << " + 1 and attack_hit_timer == 1) attack_hit_timer = 0; end\n";
+      out << ind << "     elseif (d_dist < (" << visionRange << " * 4.0))\n";
+      out << ind << "         // ESTADO: PERSEGUIR\n";
+      out << ind << "         npc_path_active = 0;\n";
+      out << ind << "         world_angle = -fget_angle(0, 0, (g_player_x - world_x)*1000.0, (g_player_y - world_y)*1000.0) / 57295.78;\n";
+      out << ind << "         if (collision_detected == 0)\n";
+      out << ind << "             world_x += ((g_player_x - world_x) / d_dist) * " << speed << " * 3;\n";
+      out << ind << "             world_y += ((g_player_y - world_y) / d_dist) * " << speed << " * 3;\n";
+      if (entity.snapToFloor)
+        out << ind << "             world_z = RAY_GET_FLOOR_HEIGHT(world_x, world_y);\n";
+      out << ind << "         end\n";
+      out << ind << "         if (current_anim_start != 0 and collision_detected == 0)\n";
+      out << ind << "             current_anim_start = 0; current_anim_end = 14; current_anim_speed = 10;\n";
+      out << ind << "             anim_current_frame = 0; anim_next_frame = 1; anim_interpolation = 0.0;\n";
+      out << ind << "         end\n";
+      out << ind << "     else\n";
+      out << ind << "         // ESTADO: PATRULLAR / IDLE\n";
+      out << ind << "         if (" << (entity.npcPathId >= 0 ? "1" : "0") << " == 1)\n";
+      out << ind << "             npc_path_active = 1;\n";
+      out << ind << "         else\n";
+      out << ind << "             if (current_anim_start != 0)\n";
+      out << ind << "                 current_anim_start = 0; current_anim_end = 14; current_anim_speed = 3;\n";
+      out << ind << "                 anim_current_frame = 0; anim_next_frame = 1; anim_interpolation = 0.0;\n";
+      out << ind << "             end\n";
+      out << ind << "         end\n";
+      out << ind << "     end\n";
+      out << ind << " elseif (g_player_health <= 0.0)\n";
+      out << ind << "     // JUGADOR MUERTO: IDLE\n";
+      out << ind << "     npc_path_active = 0;\n";
+      out << ind << "     if (current_anim_start != 0)\n";
+      out << ind << "         current_anim_start = 0; current_anim_end = 14; current_anim_speed = 3;\n";
+      out << ind << "         anim_current_frame = 0; anim_next_frame = 1; anim_interpolation = 0.0;\n";
+      out << ind << "     end\n";
+      out << ind << " end\n";
+    } else if (current->type == "ai_damage_director") {
+      QString painStart = res.resolve(current->pins[2].pinId);
+      QString painEnd = res.resolve(current->pins[3].pinId);
+      QString deathStart = res.resolve(current->pins[4].pinId);
+      QString deathEnd = res.resolve(current->pins[5].pinId);
+      QString speed = res.resolve(current->pins[6].pinId);
+
+      out << ind << " // --- AI DAMAGE/DEATH DIRECTOR ---\n";
+      out << ind << " if (health <= 0.0)\n";
+      out << ind << "     // ESTADO: MUERTE\n";
+      out << ind << "     if (current_anim_start != " << deathStart << " or current_anim_end != " << deathEnd << ")\n";
+      out << ind << "         current_anim_start = " << deathStart << "; current_anim_end = " << deathEnd << "; current_anim_speed = " << speed << ";\n";
+      out << ind << "         anim_current_frame = " << deathStart << "; anim_next_frame = " << deathStart << " + 1; anim_interpolation = 0.0;\n";
+      out << ind << "     end\n";
+      out << ind << " else\n";
+      out << ind << "     // ESTADO: DAÑO (Pain)\n";
+      out << ind << "     if (current_anim_start != " << painStart << " or current_anim_end != " << painEnd << ")\n";
+      out << ind << "         current_anim_start = " << painStart << "; current_anim_end = " << painEnd << "; current_anim_speed = " << speed << ";\n";
+      out << ind << "         anim_current_frame = " << painStart << "; anim_next_frame = " << painStart << " + 1; anim_interpolation = 0.0;\n";
+      out << ind << "     end\n";
+      out << ind << " end\n";
     } else if (current->type == "action_npc_flee") {
       QString speed = res.resolve(current->pins[3].pinId);
       out << ind
@@ -1582,11 +1717,6 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       QString gStart = res.resolve(current->pins[2].pinId);
       QString gEnd = res.resolve(current->pins[3].pinId);
       QString speed = res.resolve(current->pins[4].pinId);
-      // Stop path and face player during animation (e.g. attack)
-      out << ind << " npc_path_active = 0;\n";
-      out << ind
-          << " world_angle = -fget_angle(0, 0, (g_player_x - world_x)*1000.0, "
-             "(g_player_y - world_y)*1000.0) / 57295.78;\n";
       out << ind << " if (current_anim_start != " << gStart
           << " or current_anim_end != " << gEnd << ")\n";
       out << ind << "     current_anim_start = " << gStart
@@ -1694,16 +1824,22 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       out << ind << " if (" << res.resolve(current->pins[3].pinId) << ")\n";
       const NodePinData *tPin = &current->pins[1];
       if (!tPin->linkedPinIds.isEmpty()) {
-        const NodePinData *next =
-            pinMap.value(tPin->linkedPinIds.first(), nullptr);
+        const NodePinData *next = nullptr;
+        for (int lid : tPin->linkedPinIds) {
+            next = pinMap.value(lid, nullptr);
+            if (next) break;
+        }
         generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
                      indent + 4, visited);
       }
       const NodePinData *fPin = &current->pins[2];
       if (!fPin->linkedPinIds.isEmpty()) {
         out << ind << " else\n";
-        const NodePinData *next =
-            pinMap.value(fPin->linkedPinIds.first(), nullptr);
+        const NodePinData *next = nullptr;
+        for (int lid : fPin->linkedPinIds) {
+            next = pinMap.value(lid, nullptr);
+            if (next) break;
+        }
         generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
                      indent + 4, visited);
       }
@@ -1717,8 +1853,11 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
         }
       }
       if (outPin && !outPin->linkedPinIds.isEmpty()) {
-        const NodePinData *next =
-            pinMap.value(outPin->linkedPinIds.first(), nullptr);
+        const NodePinData *next = nullptr;
+        for (int lid : outPin->linkedPinIds) {
+            next = pinMap.value(lid, nullptr);
+            if (next) break;
+        }
         generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
                      indent, visited);
       }

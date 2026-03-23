@@ -1659,11 +1659,22 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       out << ind << "         end\n";
       out << ind << "     end\n";
       out << ind << " elseif (g_player_health <= 0.0)\n";
-      out << ind << "     // JUGADOR MUERTO: IDLE\n";
-      out << ind << "     npc_path_active = 0;\n";
-      out << ind << "     if (current_anim_start != 0)\n";
+      out << ind << "     // JUGADOR MUERTO: EXECUTAR RAMA UNA SOLA VEZ O IDLE POR DEFECTO\n";
+      out << ind << "     if (player_death_triggered == 0)\n";
+      out << ind << "         player_death_triggered = 1;\n";
+      out << ind << "         npc_path_active = 0;\n";
+      out << ind << "         // Reset a animación de reposo\n";
       out << ind << "         current_anim_start = 0; current_anim_end = 14; current_anim_speed = 3;\n";
       out << ind << "         anim_current_frame = 0; anim_next_frame = 1; anim_interpolation = 0.0;\n";
+      if (current->pins.size() > 10) {
+        const NodePinData &pdPin = current->pins[10];
+        if (!pdPin.linkedPinIds.isEmpty()) {
+            for (int lid : pdPin.linkedPinIds) {
+                const NodePinData *next = pinMap.value(lid, nullptr);
+                if (next) generateFlow(pinToNodeMap.value(next->pinId, nullptr), indent + 9, visited);
+            }
+        }
+      }
       out << ind << "     end\n";
       out << ind << " end\n";
     } else if (current->type == "ai_damage_director") {
@@ -1706,6 +1717,7 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       out << ind << " end\n";
     } else if (current->type == "action_sound") {
       QString file = res.resolve(current->pins[2].pinId);
+      file.remove("\"");
       QString loops = res.resolve(current->pins[4].pinId);
       out << ind << " if (behavior_timer <= 0)\n";
       out << ind << "     s_id = SOUND_LOAD(\"" << file << "\");\n";
@@ -1824,24 +1836,18 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
       out << ind << " if (" << res.resolve(current->pins[3].pinId) << ")\n";
       const NodePinData *tPin = &current->pins[1];
       if (!tPin->linkedPinIds.isEmpty()) {
-        const NodePinData *next = nullptr;
         for (int lid : tPin->linkedPinIds) {
-            next = pinMap.value(lid, nullptr);
-            if (next) break;
+            const NodePinData *next = pinMap.value(lid, nullptr);
+            if (next) generateFlow(pinToNodeMap.value(next->pinId, nullptr), indent + 4, visited);
         }
-        generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
-                     indent + 4, visited);
       }
       const NodePinData *fPin = &current->pins[2];
       if (!fPin->linkedPinIds.isEmpty()) {
         out << ind << " else\n";
-        const NodePinData *next = nullptr;
         for (int lid : fPin->linkedPinIds) {
-            next = pinMap.value(lid, nullptr);
-            if (next) break;
+            const NodePinData *next = pinMap.value(lid, nullptr);
+            if (next) generateFlow(pinToNodeMap.value(next->pinId, nullptr), indent + 4, visited);
         }
-        generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
-                     indent + 4, visited);
       }
       out << ind << " end\n";
     } else {
@@ -1853,13 +1859,12 @@ QString ProcessGenerator::generateGraphCode(const EntityInstance &entity,
         }
       }
       if (outPin && !outPin->linkedPinIds.isEmpty()) {
-        const NodePinData *next = nullptr;
         for (int lid : outPin->linkedPinIds) {
-            next = pinMap.value(lid, nullptr);
-            if (next) break;
+            const NodePinData *next = pinMap.value(lid, nullptr);
+            if (next) {
+                generateFlow(pinToNodeMap.value(next->pinId, nullptr), indent, visited);
+            }
         }
-        generateFlow(next ? pinToNodeMap.value(next->pinId, nullptr) : nullptr,
-                     indent, visited);
       }
     }
   };

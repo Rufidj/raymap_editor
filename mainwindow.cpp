@@ -501,7 +501,7 @@ void MainWindow::createMenus() {
           &MainWindow::onConfigureBennuGD2);
   buildMenu->addAction(configAction);
 
-  QAction *installBennuAction = new QAction(tr("Instalar BennuGD2..."), this);
+  QAction *installBennuAction = new QAction(tr("Instalar Runtimes y Requisitos..."), this);
   connect(installBennuAction, &QAction::triggered, this,
           &MainWindow::onInstallBennuGD2);
   buildMenu->addAction(installBennuAction);

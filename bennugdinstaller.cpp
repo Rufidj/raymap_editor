@@ -10,6 +10,8 @@
 #include <QPainter>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QNetworkRequest>
+#include <QTabWidget>
 #include <QVBoxLayout>
 
 BennuGDInstaller::BennuGDInstaller(QWidget *parent)
@@ -51,10 +53,15 @@ BennuGDInstaller::BennuGDInstaller(QWidget *parent)
   m_progressBar->setValue(0);
   m_progressBar->setTextVisible(true);
 
-  m_cancelButton = new QPushButton("Cancelar", this);
+  m_installJDKButton = new QPushButton("Instalar JDK 21 (Requerido para Android)", this);
+  m_installJDKButton->setVisible(false);
+  connect(m_installJDKButton, &QPushButton::clicked, this, &BennuGDInstaller::onInstallJDKClicked);
+
+  m_cancelButton = new QPushButton("Cerrar", this);
 
   layout->addWidget(m_statusLabel);
   layout->addWidget(m_progressBar);
+  layout->addWidget(m_installJDKButton);
   layout->addWidget(m_cancelButton);
 
   connect(m_cancelButton, &QPushButton::clicked, this, &QDialog::reject);
@@ -80,39 +87,76 @@ bool BennuGDInstaller::checkMissingRuntimes() {
   return false; // All present
 }
 
-void BennuGDInstaller::startInstallation() {
-  bool missing = checkMissingRuntimes();
+bool BennuGDInstaller::checkJDKMissing() {
+#ifdef Q_OS_LINUX
+  return !QFile::exists("/usr/lib/jvm/java-21-openjdk-amd64/bin/javac");
+#else
+  // For other platforms, check version via QProcess? Or assume missing for now
+  // to be safe if not in path
+  QProcess p;
+  p.start("javac", QStringList() << "-version");
+  p.waitForFinished();
+  return (p.exitCode() != 0);
+#endif
+}
 
-  if (missing) {
+bool BennuGDInstaller::checkMagickMissing() {
+  return QStandardPaths::findExecutable("magick").isEmpty() && 
+         QStandardPaths::findExecutable("convert").isEmpty();
+}
+
+void BennuGDInstaller::startInstallation() {
+  bool missingRuntimes = checkMissingRuntimes();
+  bool missingJDK = checkJDKMissing();
+  bool missingMagick = checkMagickMissing();
+
+  QString statusText;
+  if (missingJDK || missingMagick) {
+    statusText = "Faltan prerrequisitos de sistema para Android:\n";
+    if (missingJDK) statusText += "- Java 21 JDK\n";
+    if (missingMagick) statusText += "- ImageMagick (para iconos)\n";
+    m_installJDKButton->setVisible(true);
+  }
+
+  if (missingRuntimes) {
+    statusText += "\nSe detectaron runtimes de BennuGD2 faltantes.\n¿Desea descargarlos?";
     QMessageBox::StandardButton res = QMessageBox::question(
-        this, "Runtimes Faltantes",
-        "Se han detectado runtimes faltantes necesarios para compilar y "
-        "exportar.\n"
-        "¿Desea descargarlos ahora desde el repositorio oficial? (Recomendado)",
+        this, "Instalación", statusText,
         QMessageBox::Yes | QMessageBox::No);
 
     if (res == QMessageBox::Yes) {
       m_downloadQueue.clear();
       m_statusLabel->setText("Iniciando descarga...");
-      fetchLatestRelease(); // Will use manual URLs
-    } else {
-      reject();
-    }
-  } else {
-    // Already installed
-    QMessageBox::StandardButton res = QMessageBox::question(
-        this, "Runtimes Instalados",
-        "Parece que los runtimes ya están instalados.\n¿Desea volver a "
-        "descargarlos y reinstalarlos?",
-        QMessageBox::Yes | QMessageBox::No);
-
-    if (res == QMessageBox::Yes) {
-      m_downloadQueue.clear();
       fetchLatestRelease();
-    } else {
-      accept(); // Done
     }
+  } else if (!missingJDK && !missingMagick) {
+    m_statusLabel->setText("Todo está instalado correctamente.");
+    QMessageBox::information(this, "Estado", "Tu entorno de desarrollo está listo.");
+    accept();
+  } else {
+    m_statusLabel->setText(statusText);
   }
+}
+
+void BennuGDInstaller::onInstallJDKClicked() {
+#ifdef Q_OS_LINUX
+  m_statusLabel->setText("Intentando instalar prerrequisitos vía terminal...");
+  // Use pkexec or just a terminal with sudo
+  QString cmd = "sudo apt update && sudo apt install -y openjdk-21-jdk imagemagick";
+  
+  // We can use a script or run in the editor's terminal if we had access to it.
+  // For now, let's try to launch a terminal.
+  QProcess::startDetached("x-terminal-emulator", QStringList() << "-e" << "bash -c \"" + cmd + "; echo; echo 'Presiona Enter para cerrar'; read\"");
+  
+  m_statusLabel->setText("Se ha abierto una terminal para la instalación.\n"
+                         "Por favor, completa los pasos y vuelve a pulsar 'Comprobar'.");
+  m_installJDKButton->setText("Comprobar de nuevo");
+  disconnect(m_installJDKButton, &QPushButton::clicked, this, &BennuGDInstaller::onInstallJDKClicked);
+  connect(m_installJDKButton, &QPushButton::clicked, this, &BennuGDInstaller::startInstallation);
+#else
+  QDesktopServices::openUrl(QUrl("https://www.oracle.com/java/technologies/downloads/#java21"));
+  QMessageBox::information(this, "Manual", "Se ha abierto la página de descarga. Instala el JDK 21 y reinicia el editor.");
+#endif
 }
 
 void BennuGDInstaller::fetchLatestRelease() {

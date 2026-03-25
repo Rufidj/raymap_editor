@@ -752,6 +752,7 @@ void PublishDialog::checkAndroidTools()
     if (!envJava.isEmpty() && !envJava.contains(" ")) candidates << envJava;
     
     candidates << "/usr/lib/jvm/java-17-openjdk-amd64"
+               << "/usr/lib/jvm/java-21-openjdk-amd64"
                << "/usr/lib/jvm/default-java"
                << QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/android-studio/jbr"
                << "/opt/android-studio/jbr"

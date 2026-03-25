@@ -1,3 +1,6 @@
+#include "rampgeneratordialog.h"
+#include "textureselector.h"
+#include <QMessageBox>
 
 void RampGeneratorDialog::setTextures(const QMap<int, QPixmap> &textures)
 {

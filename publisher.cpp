@@ -675,6 +675,15 @@ bool Publisher::publishLinux(const ProjectData &project,
 bool Publisher::publishAndroid(const ProjectData &project,
                                const PublishConfig &config) {
   // ... (existing beginning)
+  emit progress(5, "Verificando entorno...");
+  QString jdkPath = "/usr/lib/jvm/java-21-openjdk-amd64";
+  if (!QFile::exists(jdkPath + "/bin/javac")) {
+    emit finished(false, "No se encontró el JDK de Java 21 en " + jdkPath + ".\n"
+                         "Es necesario para compilar el proyecto Android.\n"
+                         "Instálalo ejecutando: sudo apt install openjdk-21-jdk");
+    return false;
+  }
+
   emit progress(10, "Preparando proyecto Android...");
 
   // Generate internal structure (No external template dependency)
@@ -724,7 +733,9 @@ bool Publisher::publishAndroid(const ProjectData &project,
   if (gp.open(QIODevice::WriteOnly)) {
     QTextStream(&gp) << "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8\n"
                      << "android.useAndroidX=true\n"
-                     << "android.enableJetifier=true\n";
+                     << "android.enableJetifier=true\n"
+                     << "org.gradle.java.home=/usr/lib/jvm/java-21-openjdk-amd64\n"
+                     << "org.gradle.java.installations.paths=/usr/lib/jvm/java-21-openjdk-amd64\n";
     gp.close();
   }
 
@@ -790,6 +801,10 @@ bool Publisher::publishAndroid(const ProjectData &project,
         << "android {\n"
         << "    namespace '" << config.packageName << "'\n"
         << "    compileSdk 34\n\n"
+        << "    compileOptions {\n"
+        << "        sourceCompatibility JavaVersion.VERSION_17\n"
+        << "        targetCompatibility JavaVersion.VERSION_17\n"
+        << "    }\n\n"
         << "    defaultConfig {\n"
         << "        applicationId '" << config.packageName << "'\n"
         << "        minSdk 21\n"
@@ -866,40 +881,44 @@ bool Publisher::publishAndroid(const ProjectData &project,
     out << "import java.io.FileOutputStream;\n";
     out << "import java.io.IOException;\n";
     out << "import java.io.InputStream;\n";
+    out << "import android.view.View;\n";
+    out << "import android.view.WindowManager;\n";
     out << "import java.lang.reflect.Method;\n\n";
 
     out << "public class " << activityName << " extends SDLActivity {\n\n";
 
     out << "    private void recursiveCopy(String path) {\n";
     out << "        try {\n";
-    out << "            String[] list = getAssets().list(path);\n";
-    out << "            if (list.length == 0) {\n";
-    out << "                // File\n";
+    out << "            InputStream is = null;\n";
+    out << "            try {\n";
+    out << "                is = getAssets().open(path);\n";
+    out << "            } catch (IOException e) { /* Not a file */ }\n";
+    out << "            if (is != null) {\n";
+    out << "                is.close();\n";
     out << "                copyAssetFile(path);\n";
     out << "            } else {\n";
-    out << "                // Directory\n";
-    out << "                File dir = new File(getFilesDir(), path);\n";
-    out << "                if (!dir.exists()) dir.mkdirs();\n";
-    out << "                for (String file : list) {\n";
-    out << "                   if (path.equals(\"\")) recursiveCopy(file);\n";
-    out << "                   else recursiveCopy(path + \"/\" + file);\n";
+    out << "                String[] list = getAssets().list(path);\n";
+    out << "                if (list != null && list.length > 0) {\n";
+    out << "                    File dir = new File(getFilesDir(), path);\n";
+    out << "                    if (!dir.exists()) dir.mkdirs();\n";
+    out << "                    for (String file : list) {\n";
+    out << "                        recursiveCopy(path.isEmpty() ? file : path + \"/\" + file);\n";
+    out << "                    }\n";
     out << "                }\n";
     out << "            }\n";
-    out << "        } catch (IOException e) { e.printStackTrace(); }\n";
+    out << "        } catch (IOException e) { }\n";
     out << "    }\n\n";
 
     out << "    private void copyAssetFile(String filename) {\n";
-    out << "        if (filename.equals(\"images\") || "
-           "filename.equals(\"webkit\") || filename.equals(\"sounds\")) "
-           "return;\n"; // Skip system junk
+    out << "        if (filename.equals(\"webkit\")) return;\n"; 
     out << "        try {\n";
     out << "            InputStream in = getAssets().open(filename);\n";
     out << "            File outFile = new File(getFilesDir(), filename);\n";
-    out << "            // Optimization: Only copy if size differs or not "
-           "exists? For dev, overwrite always.\n";
-    out << "            FileOutputStream out = new "
-           "FileOutputStream(outFile);\n";
-    out << "            byte[] buffer = new byte[4096];\n";
+    out << "            File parent = outFile.getParentFile();\n";
+    out << "            if (parent != null && !parent.exists()) parent.mkdirs();\n";
+    out << "            android.util.Log.d(\"BennuDebug\", \"Extracting: \" + filename);\n";
+    out << "            FileOutputStream out = new FileOutputStream(outFile);\n";
+    out << "            byte[] buffer = new byte[8192];\n";
     out << "            int read;\n";
     out << "            while((read = in.read(buffer)) != -1) {\n";
     out << "                out.write(buffer, 0, read);\n";
@@ -907,8 +926,7 @@ bool Publisher::publishAndroid(const ProjectData &project,
     out << "            in.close();\n";
     out << "            out.close();\n";
     out << "        } catch (IOException e) {\n";
-    out << "             // Ignore errors for individual files (might be "
-           "directories mistaken as files)\n";
+    out << "             android.util.Log.e(\"BennuDebug\", \"Failed: \" + filename);\n";
     out << "        }\n";
     out << "    }\n\n";
 
@@ -984,8 +1002,28 @@ bool Publisher::publishAndroid(const ProjectData &project,
     out << "            e.printStackTrace();\n";
     out << "        }\n\n";
     out << "        super.onCreate(savedInstanceState);\n";
+        out << "        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {\n";
+    out << "            getWindow().getAttributes().layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;\n";
+    out << "        }\n";
+    out << "        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);\n";
+    out << "        hideSystemUI();\n";
     out << "        // AdsModule.initialize(this);\n";
     out << "        // IAPModule.initialize(this);\n";
+    out << "    }\n\n";
+    out << "    @Override\n";
+    out << "    public void onWindowFocusChanged(boolean hasFocus) {\n";
+    out << "        super.onWindowFocusChanged(hasFocus);\n";
+    out << "        if (hasFocus) hideSystemUI();\n";
+    out << "    }\n\n";
+    out << "    private void hideSystemUI() {\n";
+    out << "        View decorView = getWindow().getDecorView();\n";
+    out << "        decorView.setSystemUiVisibility(\n";
+    out << "                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY\n";
+    out << "                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE\n";
+    out << "                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION\n";
+    out << "                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN\n";
+    out << "                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION\n";
+    out << "                | View.SYSTEM_UI_FLAG_FULLSCREEN);\n";
     out << "    }\n";
     out << "    \n";
     out << "    @Override\n";
@@ -1282,6 +1320,7 @@ bool Publisher::publishAndroid(const ProjectData &project,
     if (javaHome.isEmpty() || !QDir(javaHome).exists()) {
       QStringList candidates;
       candidates << "/usr/lib/jvm/java-17-openjdk-amd64"
+                 << "/usr/lib/jvm/java-21-openjdk-amd64"
                  << "/usr/lib/jvm/default-java"
                  << "/usr/lib/jvm/java-11-openjdk-amd64"
                  << QStandardPaths::writableLocation(
@@ -1316,7 +1355,9 @@ bool Publisher::publishAndroid(const ProjectData &project,
     if (!javaHome.isEmpty() && QFile::exists(javaHome + "/bin/java")) {
       QString javaExe = javaHome + "/bin/java";
       QStringList args;
-      args << "-Dorg.gradle.appname=gradlew" << "-classpath"
+      args << "-Dorg.gradle.appname=gradlew" 
+           << "-Dorg.gradle.java.home=" + javaHome
+           << "-classpath"
            << "gradle/wrapper/gradle-wrapper.jar"
            << "org.gradle.wrapper.GradleWrapperMain" << task;
 
@@ -1963,10 +2004,12 @@ bool Publisher::publishSwitch(const ProjectData &project,
   emit progress(20, "Buscando runtime (bgdi.elf)...");
   QString bgdiPath;
 
-  // Prefer "runtime/switch" relative to app
+  // Check home directory (~/.bennugd2/runtime/switch) - Consistency with other platforms
+  QString homeRuntime = QDir::homePath() + "/.bennugd2/runtime/switch";
   QString appDir = QCoreApplication::applicationDirPath();
   QStringList candidates;
-  candidates << appDir + "/runtime/switch/bgdi.elf"
+  candidates << homeRuntime + "/bgdi.elf"
+             << appDir + "/runtime/switch/bgdi.elf"
              << appDir + "/../runtime/switch/bgdi.elf" << appDir + "/bgdi.elf"
              << QDir::currentPath() + "/bgdi.elf";
 

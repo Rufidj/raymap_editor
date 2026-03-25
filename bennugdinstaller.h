@@ -24,6 +24,7 @@ signals:
 private slots:
     void onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
     void onDownloadFinished();
+    void onInstallJDKClicked();
 
 private:
     struct DownloadTask {
@@ -40,6 +41,7 @@ private:
     QProgressBar *m_progressBar;
     QLabel *m_statusLabel;
     QPushButton *m_cancelButton;
+    QPushButton *m_installJDKButton;
     
     QNetworkAccessManager *m_networkManager;
     QNetworkReply *m_currentReply;
@@ -49,6 +51,8 @@ private:
     QString m_tempFilePath;
     
     bool checkMissingRuntimes();
+    bool checkJDKMissing();
+    bool checkMagickMissing();
 };
 
 #endif // BENNUGDINSTALLER_H
